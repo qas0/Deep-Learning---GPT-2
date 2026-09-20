@@ -137,6 +137,48 @@ class Tensor:
         other = other if isinstance(other, Tensor) else Tensor(other)
         return other / self
 
+    # activation functions
+
+    def relu(self):
+        """keep positive values and use a zero gradient at zero"""
+        positive = self.data > 0
+        result = Tensor(
+            np.maximum(self.data, 0),
+            requires_grad=self.requires_grad,
+            _children=(self,),
+        )
+
+        def _backward():
+            if self.requires_grad:
+                # Negative and zero inputs block the incoming gradient.
+                self.grad += result.grad * positive
+
+        result._backward = _backward
+        return result
+
+    def gelu(self):
+        """apply the tanh approximation of GELU used by GPT-2"""
+        x = self.data
+        scale = np.sqrt(2 / np.pi)
+        tanh_value = np.tanh(scale * (x + 0.044715 * x**3))
+        result = Tensor(
+            0.5 * x * (1 + tanh_value),
+            requires_grad=self.requires_grad,
+            _children=(self,),
+        )
+
+        def _backward():
+            if self.requires_grad:
+                # Product rule for x * (1 + tanh(u)), then chain rule through u.
+                inner_gradient = scale * (1 + 3 * 0.044715 * x**2)
+                local_gradient = 0.5 * (1 + tanh_value) + (
+                    0.5 * x * (1 - tanh_value**2) * inner_gradient
+                )
+                self.grad += result.grad * local_gradient
+
+        result._backward = _backward
+        return result
+
     # handles matrix and shape operations 
 
     def __matmul__(self, other):

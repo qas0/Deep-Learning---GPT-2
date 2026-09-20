@@ -1,3 +1,5 @@
+import numpy as np
+
 from tensor import Tensor
 
 
@@ -55,3 +57,47 @@ class Module:
 
     def __call__(self, *inputs):
         return self.forward(*inputs)
+
+
+class Linear(Module):
+    """transforms final input dimension using learned weights + bias"""
+
+    def __init__(self, in_features, out_features, rng=None):
+        for size in (in_features, out_features):
+            if isinstance(size, bool) or not isinstance(size, (int, np.integer)):
+                raise TypeError("feature counts must be integers")
+            if size <= 0:
+                raise ValueError("feature counts must be positive")
+
+        self.in_features = in_features
+        self.out_features = out_features
+        rng = np.random.default_rng() if rng is None else rng
+
+        # scales random weights by input width to limit initial output size
+        limit = 1 / np.sqrt(in_features)
+        self.weight = Parameter(
+            rng.uniform(-limit, limit, size=(in_features, out_features))
+        )
+        self.bias = Parameter(np.zeros(out_features))
+
+    def forward(self, x):
+        """map shape (..., in_features) to (..., out_features)"""
+        if not x.shape or x.shape[-1] != self.in_features:
+            raise ValueError(f"expected final input dimension {self.in_features}")
+
+        # The same bias vector is added to each example or token.
+        return x @ self.weight + self.bias
+
+
+class ReLU(Module):
+    """elementwise activation that replaces negative values with zero"""
+
+    def forward(self, x):
+        return x.relu()
+
+
+class GELU(Module):
+    """elementwise activation using GPT-2's tanh approximation"""
+
+    def forward(self, x):
+        return x.gelu()

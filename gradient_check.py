@@ -1,6 +1,7 @@
 import numpy as np
 
 from tensor import Tensor
+from nn import ReLU, GELU
 
 
 def numerical_gradient(function, inputs, input_number, epsilon=1e-6):
@@ -76,6 +77,19 @@ def main():
         "reshape and indexing",
         lambda x: (x[indices].reshape(3, 2).transpose(1, 0) ** 2).mean(),
         [rng.normal(size=(5, 2))],
+    )
+
+    weights = np.array([[-2.0, 1.0, 3.0], [0.5, -1.0, 2.0]])
+    # ReLU has no derivative at zero; check our zero convention against PyTorch.
+    check_gradients(
+        "ReLU",
+        lambda x: (ReLU()(x) * weights).sum(),
+        [np.array([[-3.0, -0.5, -0.01], [0.01, 0.5, 3.0]])],
+    )
+    check_gradients(
+        "GELU (tanh)",
+        lambda x: (GELU()(x) * weights).sum(),
+        [np.array([[-4.0, -1.0, 0.0], [0.1, 1.0, 4.0]])],
     )
 
     print("All gradient checks passed.")
