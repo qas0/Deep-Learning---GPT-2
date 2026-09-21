@@ -1,7 +1,7 @@
 import numpy as np
 
 from tensor import Tensor
-from nn import ReLU, GELU
+from nn import ReLU, GELU, Softmax, CrossEntropyLoss
 
 
 def numerical_gradient(function, inputs, input_number, epsilon=1e-6):
@@ -80,7 +80,7 @@ def main():
     )
 
     weights = np.array([[-2.0, 1.0, 3.0], [0.5, -1.0, 2.0]])
-    # ReLU has no derivative at zero; check our zero convention against PyTorch.
+    # ReLU has no derivative at zero
     check_gradients(
         "ReLU",
         lambda x: (ReLU()(x) * weights).sum(),
@@ -90,6 +90,26 @@ def main():
         "GELU (tanh)",
         lambda x: (GELU()(x) * weights).sum(),
         [np.array([[-4.0, -1.0, 0.0], [0.1, 1.0, 4.0]])],
+    )
+
+    scores = rng.normal(size=(2, 3))
+    for axis in (0, -1):
+        check_gradients(
+            f"softmax axis {axis}",
+            lambda x: (Softmax(axis)(x) * weights).sum(),
+            [scores],
+        )
+        check_gradients(
+            f"log-softmax axis {axis}",
+            lambda x: (x.log_softmax(axis) * weights).sum(),
+            [scores],
+        )
+
+    targets = np.array([[0, 2], [1, 0]])
+    check_gradients(
+        "cross-entropy",
+        lambda x: CrossEntropyLoss()(x, targets),
+        [rng.normal(size=(2, 2, 3))],
     )
 
     print("All gradient checks passed.")

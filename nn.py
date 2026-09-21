@@ -90,14 +90,47 @@ class Linear(Module):
 
 
 class ReLU(Module):
-    """elementwise activation that replaces negative values with zero"""
+    """applies ReLU to each value, keeping positive values + replacing negatives with 0"""
 
     def forward(self, x):
         return x.relu()
 
 
 class GELU(Module):
-    """elementwise activation using GPT-2's tanh approximation"""
+    
 
     def forward(self, x):
         return x.gelu()
+
+
+class Softmax(Module):
+    """applies softmax along axis to turn scores into probabilities"""
+
+    def __init__(self, axis=-1):
+        self.axis = axis
+
+    def forward(self, x):
+        return x.softmax(axis=self.axis)
+
+
+class CrossEntropyLoss(Module):
+    """averages loss for logits shaped (..., classes) + target class indices shaped"""
+
+    def forward(self, logits, targets):
+        if not logits.shape or logits.data.size == 0:
+            raise ValueError("logits must be nonempty and have a class dimension")
+
+        targets = np.asarray(targets)
+        if targets.shape != logits.shape[:-1]:
+            raise ValueError("target shape must match logits without the class axis")
+        if not np.issubdtype(targets.dtype, np.integer):
+            raise TypeError("targets must contain integer class indices")
+
+        classes = logits.shape[-1]
+        if np.any(targets < 0) or np.any(targets >= classes):
+            raise ValueError("target class index is out of range")
+
+        
+        log_probabilities = logits.log_softmax().reshape(-1, classes)
+        rows = np.arange(targets.size)
+        return -log_probabilities[rows, targets.reshape(-1)].mean()

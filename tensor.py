@@ -140,7 +140,7 @@ class Tensor:
     # activation functions
 
     def relu(self):
-        """keep positive values and use a zero gradient at zero"""
+        """keeps positive values + replaces negative values with 0"""
         positive = self.data > 0
         result = Tensor(
             np.maximum(self.data, 0),
@@ -150,14 +150,14 @@ class Tensor:
 
         def _backward():
             if self.requires_grad:
-                # Negative and zero inputs block the incoming gradient.
+                # blocks incoming gradient if inputs consist of negative & 0
                 self.grad += result.grad * positive
 
         result._backward = _backward
         return result
 
     def gelu(self):
-        """apply the tanh approximation of GELU used by GPT-2"""
+        """applies tanh approximation of GELU""" 
         x = self.data
         scale = np.sqrt(2 / np.pi)
         tanh_value = np.tanh(scale * (x + 0.044715 * x**3))
@@ -169,12 +169,58 @@ class Tensor:
 
         def _backward():
             if self.requires_grad:
-                # Product rule for x * (1 + tanh(u)), then chain rule through u.
+                # uses product rule for x * (1 + tanh(u)) + chain rule through u
                 inner_gradient = scale * (1 + 3 * 0.044715 * x**2)
                 local_gradient = 0.5 * (1 + tanh_value) + (
                     0.5 * x * (1 - tanh_value**2) * inner_gradient
                 )
                 self.grad += result.grad * local_gradient
+
+        result._backward = _backward
+        return result
+
+    # probabilities and log probabilities
+
+    def softmax(self, axis=-1):
+        """converts scores to probabilities that sum to 1 along chosen axis"""
+        # subtracts the largest score to stop exp overflowing without changing the probabilities
+        shifted = self.data - self.data.max(axis=axis, keepdims=True)
+        exponentials = np.exp(shifted)
+        probabilities = exponentials / exponentials.sum(axis=axis, keepdims=True)
+        result = Tensor(
+            probabilities,
+            requires_grad=self.requires_grad,
+            _children=(self,),
+        )
+
+        def _backward():
+            if self.requires_grad:
+
+                weighted_gradient = (result.grad * probabilities).sum(
+                    axis=axis, keepdims=True
+                )
+                self.grad += probabilities * (result.grad - weighted_gradient)
+
+        result._backward = _backward
+        return result
+
+    def log_softmax(self, axis=-1):
+        """calculates log probabilities directly to avoid taking log of zero"""
+        shifted = self.data - self.data.max(axis=axis, keepdims=True)
+        log_total = np.log(np.exp(shifted).sum(axis=axis, keepdims=True))
+        log_probabilities = shifted - log_total
+        probabilities = np.exp(log_probabilities)
+        result = Tensor(
+            log_probabilities,
+            requires_grad=self.requires_grad,
+            _children=(self,),
+        )
+
+        def _backward():
+            if self.requires_grad:
+                self.grad += result.grad - probabilities * result.grad.sum(
+                    axis=axis, keepdims=True
+                )
 
         result._backward = _backward
         return result
