@@ -6,7 +6,7 @@ from sklearn.model_selection import train_test_split
 
 from tensor import Tensor
 from nn import Module, Linear, ReLU, CrossEntropyLoss
-from optim import SGD
+from optim import Adam
 
 
 class DigitsClassifier(Module):
@@ -48,17 +48,17 @@ def main():
     seed = 7
     epochs = 200
     batch_size = 16
-    learning_rate = 0.1
+    learning_rate = 0.001
     rng = np.random.default_rng(seed)
     (train_x, train_y), (validation_x, validation_y), (test_x, test_y) = load_data(seed)
     model = DigitsClassifier(rng)
     parameters = model.parameters()
-    optimiser = SGD(parameters, lr=learning_rate)
+    optimiser = Adam(parameters, lr=learning_rate)
     loss_function = CrossEntropyLoss()
 
     print(f"Digits: {len(train_y)} training, {len(validation_y)} validation, {len(test_y)} test")
     print(f"Network: 64 -> 16 -> 10, parameters: {sum(p.data.size for p in parameters)}")
-    print(f"SGD: lr={learning_rate}")
+    print(f"Adam: lr={learning_rate}, betas={optimiser.betas}, eps={optimiser.eps}") 
     print(f"Seed: {seed}, epochs: {epochs}, batch size: {batch_size}")
     initial_loss, initial_accuracy, _ = evaluate(model, train_x, train_y, loss_function)
     print(f"Before training: loss={initial_loss:.4f}, accuracy={initial_accuracy:.2%}")
@@ -106,16 +106,16 @@ def main():
         loss, accuracy, _ = evaluate(model, inputs, targets, loss_function)
         print(f"{name}: loss={loss:.4f}, accuracy={accuracy:.2%}")
 
-    test_loss, test_accuracy, predictions = evaluate(
-        model, test_x, test_y, loss_function
-    )
-    print(f"Test: loss={test_loss:.4f}, accuracy={test_accuracy:.2%}")
+    # test_loss, test_accuracy, predictions = evaluate(
+    #     model, test_x, test_y, loss_function
+    # )
+    # print(f"Test: loss={test_loss:.4f}, accuracy={test_accuracy:.2%}")
 
-    confusion = np.zeros((10, 10), dtype=int)
-    np.add.at(confusion, (test_y, predictions), 1)
-    print("Test confusion matrix: rows = actual, columns = predicted")
-    print("Class order: 0 to 9")
-    print(confusion)
+    # confusion = np.zeros((10, 10), dtype=int)
+    # np.add.at(confusion, (test_y, predictions), 1)
+    # print("Test confusion matrix: rows = actual, columns = predicted")
+    # print("Class order: 0 to 9")
+    # print(confusion)
     print(f"Training and evaluation time: {perf_counter() - start:.2f}s")
 
 
