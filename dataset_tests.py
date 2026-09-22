@@ -6,7 +6,7 @@ from sklearn.model_selection import train_test_split
 
 from tensor import Tensor
 from nn import Module, Linear, ReLU, CrossEntropyLoss
-from optim import Adam
+from optim import SGD
 
 
 class IrisClassifier(Module):
@@ -55,12 +55,12 @@ def main():
     (train_x, train_y), (validation_x, validation_y), (test_x, test_y) = load_data(seed)
     model = IrisClassifier(rng)
     parameters = model.parameters()
-    optimiser = Adam(parameters, lr=learning_rate)
+    optimiser = SGD(parameters, lr=learning_rate)
     loss_function = CrossEntropyLoss()
 
     print(f"Iris: {len(train_y)} training, {len(validation_y)} validation, {len(test_y)} test")
     print(f"Network: 4 -> 16 -> 3, parameters: {sum(p.data.size for p in parameters)}")
-    print(f"Adam: lr={learning_rate}, betas={optimiser.betas}, eps={optimiser.eps}")
+    print(f"SGD: lr={learning_rate}")
     print(f"Seed: {seed}, epochs: {epochs}, batch size: {batch_size}")
     initial_loss, initial_accuracy, _ = evaluate(model, train_x, train_y, loss_function)
     print(f"Before training: loss={initial_loss:.4f}, accuracy={initial_accuracy:.2%}")
