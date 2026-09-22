@@ -48,9 +48,9 @@ def evaluate(model, inputs, targets, loss_function):
 
 def main():
     seed = 7
-    epochs = 1000
+    epochs = 200
     batch_size = 16
-    learning_rate = 0.01
+    learning_rate = 0.1
     rng = np.random.default_rng(seed)
     (train_x, train_y), (validation_x, validation_y), (test_x, test_y) = load_data(seed)
     model = IrisClassifier(rng)
