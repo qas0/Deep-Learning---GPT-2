@@ -48,7 +48,7 @@ def evaluate(model, inputs, targets, loss_function):
 
 def main():
     seed = 7
-    epochs = 200
+    epochs = 1000
     batch_size = 16
     learning_rate = 0.01
     rng = np.random.default_rng(seed)
@@ -109,13 +109,7 @@ def main():
         print(f"{name}: loss={loss:.4f}, accuracy={accuracy:.2%}")
 
     
-    test_loss, test_accuracy, predictions = evaluate(model, test_x, test_y, loss_function)
-    print(f"Test: loss={test_loss:.4f}, accuracy={test_accuracy:.2%}")
-    confusion = np.zeros((3, 3), dtype=int)
-    np.add.at(confusion, (test_y, predictions), 1)
-    print("Test confusion matrix: rows = actual, columns = predicted")
-    print("Class order: setosa, versicolor, virginica")
-    print(confusion)
+    
     print(f"Training and evaluation time: {perf_counter() - start:.2f}s")
 
 
