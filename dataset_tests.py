@@ -1,7 +1,7 @@
 from time import perf_counter
 
 import numpy as np
-from sklearn.datasets import load_iris
+from sklearn.datasets import load_digits
 from sklearn.model_selection import train_test_split
 
 from tensor import Tensor
@@ -9,18 +9,18 @@ from nn import Module, Linear, ReLU, CrossEntropyLoss
 from optim import SGD
 
 
-class IrisClassifier(Module):
+class DigitsClassifier(Module):
     def __init__(self, rng):
-        self.hidden = Linear(4, 16, rng=rng)
+        self.hidden = Linear(64, 16, rng=rng)
         self.activation = ReLU()
-        self.output = Linear(16, 3, rng=rng)
+        self.output = Linear(16, 10, rng=rng)
 
     def forward(self, x):
         return self.output(self.activation(self.hidden(x)))
 
 
 def load_data(seed):
-    inputs, targets = load_iris(return_X_y=True)
+    inputs, targets = load_digits(return_X_y=True)
     train_x, test_x, train_y, test_y = train_test_split(
         inputs, targets, test_size=0.2, stratify=targets, random_state=seed
     )
@@ -28,13 +28,11 @@ def load_data(seed):
         train_x, train_y, test_size=0.25, stratify=train_y, random_state=seed
     )
 
-    # uses training statistics for every split so held out data doesnt affect scaling
-    mean = train_x.mean(axis=0)
-    scale = train_x.std(axis=0)
+
     return (
-        ((train_x - mean) / scale, train_y),
-        ((validation_x - mean) / scale, validation_y),
-        ((test_x - mean) / scale, test_y),
+        (train_x / 16, train_y),
+        (validation_x / 16, validation_y),
+        (test_x / 16, test_y),
     )
 
 
@@ -53,13 +51,13 @@ def main():
     learning_rate = 0.1
     rng = np.random.default_rng(seed)
     (train_x, train_y), (validation_x, validation_y), (test_x, test_y) = load_data(seed)
-    model = IrisClassifier(rng)
+    model = DigitsClassifier(rng)
     parameters = model.parameters()
     optimiser = SGD(parameters, lr=learning_rate)
     loss_function = CrossEntropyLoss()
 
-    print(f"Iris: {len(train_y)} training, {len(validation_y)} validation, {len(test_y)} test")
-    print(f"Network: 4 -> 16 -> 3, parameters: {sum(p.data.size for p in parameters)}")
+    print(f"Digits: {len(train_y)} training, {len(validation_y)} validation, {len(test_y)} test")
+    print(f"Network: 64 -> 16 -> 10, parameters: {sum(p.data.size for p in parameters)}")
     print(f"SGD: lr={learning_rate}")
     print(f"Seed: {seed}, epochs: {epochs}, batch size: {batch_size}")
     initial_loss, initial_accuracy, _ = evaluate(model, train_x, train_y, loss_function)
