@@ -106,8 +106,16 @@ def main():
         loss, accuracy, _ = evaluate(model, inputs, targets, loss_function)
         print(f"{name}: loss={loss:.4f}, accuracy={accuracy:.2%}")
 
-    
-    
+    test_loss, test_accuracy, predictions = evaluate(
+        model, test_x, test_y, loss_function
+    )
+    print(f"Test: loss={test_loss:.4f}, accuracy={test_accuracy:.2%}")
+
+    confusion = np.zeros((10, 10), dtype=int)
+    np.add.at(confusion, (test_y, predictions), 1)
+    print("Test confusion matrix: rows = actual, columns = predicted")
+    print("Class order: 0 to 9")
+    print(confusion)
     print(f"Training and evaluation time: {perf_counter() - start:.2f}s")
 
 
