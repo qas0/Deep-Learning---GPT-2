@@ -51,6 +51,25 @@ def check_gradients(name, function, inputs):
     print(f"{name:<24} maximum error: {largest_error:.2e}")
 
 
+def check_repeated_backward():
+    x = Tensor(2.0, requires_grad=True)
+    squared = x * x
+    loss = squared * squared
+    for expected in (32.0, 64.0):
+        loss.backward()
+        np.testing.assert_allclose(x.grad, expected)
+
+    x.grad.fill(0.0)
+    loss.backward()
+    np.testing.assert_allclose(x.grad, 32.0)
+
+    leaf = Tensor(2.0, requires_grad=True)
+    leaf.backward()
+    leaf.backward()
+    np.testing.assert_allclose(leaf.grad, 2.0)
+    print("repeated backward        gradient accumulation passed")
+
+
 def main():
     rng = np.random.default_rng(7)
 
@@ -111,6 +130,15 @@ def main():
         lambda x: CrossEntropyLoss()(x, targets),
         [rng.normal(size=(2, 2, 3))],
     )
+
+    check_gradients("power zero", lambda x: (x**0).sum(), [np.array([0.0, 2.0])])
+    transpose_weights = rng.normal(size=(2, 4, 3))
+    check_gradients(
+        "negative transpose axes",
+        lambda x: (x.transpose(0, -1, 1) * transpose_weights).sum(),
+        [rng.normal(size=(2, 3, 4))],
+    )
+    check_repeated_backward()
 
     print("All gradient checks passed.")
 

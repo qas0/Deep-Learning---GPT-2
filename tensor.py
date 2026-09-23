@@ -121,7 +121,7 @@ class Tensor:
 
         # for y = x^n, the local derivative is n * x^(n - 1), uses power rule 
         def _backward():
-            if self.requires_grad:
+            if self.requires_grad and exponent != 0:
                 self.grad += (
                     exponent * self.data ** (exponent - 1) * result.grad
                 )
@@ -195,7 +195,6 @@ class Tensor:
 
         def _backward():
             if self.requires_grad:
-
                 weighted_gradient = (result.grad * probabilities).sum(
                     axis=axis, keepdims=True
                 )
@@ -301,6 +300,7 @@ class Tensor:
             requires_grad=self.requires_grad,
             _children=(self,),
         )
+        axes = tuple(axis % self.data.ndim for axis in axes)
         inverse_axes = tuple(np.argsort(axes))
 
         # puts the grads dimensions back in their original order
@@ -330,10 +330,9 @@ class Tensor:
         result._backward = _backward
         return result
 
-        # handles sum, mean, and backpropogation
+    # handles sum, mean, and backpropogation
 
     def sum(self):
-
         result = Tensor(
             self.data.sum(),
             requires_grad=self.requires_grad,
@@ -343,13 +342,12 @@ class Tensor:
         # every input gets the same incoming grad
         def _backward():
             if self.requires_grad:
-                self.grad += np.ones_like(self.data) * result.grad
+                self.grad += result.grad
 
         result._backward = _backward
         return result
 
     def mean(self):
-
         return self.sum() / self.data.size
 
     def backward(self):
@@ -370,8 +368,15 @@ class Tensor:
 
         build_order(self)
 
+        # clears intermediate gradients while keeping accumulated input grads
+        for tensor in ordered:
+            if tensor._children and tensor.grad is not None:
+                tensor.grad.fill(0.0)
+
         # starts at 1 because the outputs derivative with respect to itself is 1
-        self.grad = np.ones_like(self.data)
+        if self.grad is None:
+            self.grad = np.zeros_like(self.data)
+        self.grad += np.ones_like(self.data)
 
         # goes through the list backwards
         for tensor in reversed(ordered):

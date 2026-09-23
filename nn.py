@@ -85,7 +85,7 @@ class Linear(Module):
         if not x.shape or x.shape[-1] != self.in_features:
             raise ValueError(f"expected final input dimension {self.in_features}")
 
-        # The same bias vector is added to each example or token.
+        
         return x @ self.weight + self.bias
 
 
@@ -97,8 +97,6 @@ class ReLU(Module):
 
 
 class GELU(Module):
-    
-
     def forward(self, x):
         return x.gelu()
 
@@ -114,7 +112,7 @@ class Softmax(Module):
 
 
 class CrossEntropyLoss(Module):
-    """averages loss for logits shaped (..., classes) + target class indices shaped"""
+    """averages loss for logits shaped (..., classes) + target class indices shaped (...)"""
 
     def forward(self, logits, targets):
         if not logits.shape or logits.data.size == 0:
@@ -130,7 +128,6 @@ class CrossEntropyLoss(Module):
         if np.any(targets < 0) or np.any(targets >= classes):
             raise ValueError("target class index is out of range")
 
-        
         log_probabilities = logits.log_softmax().reshape(-1, classes)
         rows = np.arange(targets.size)
         return -log_probabilities[rows, targets.reshape(-1)].mean()

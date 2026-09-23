@@ -28,7 +28,6 @@ def load_data(seed):
         train_x, train_y, test_size=0.25, stratify=train_y, random_state=seed
     )
 
-
     return (
         (train_x / 16, train_y),
         (validation_x / 16, validation_y),
@@ -58,7 +57,7 @@ def main():
 
     print(f"Digits: {len(train_y)} training, {len(validation_y)} validation, {len(test_y)} test")
     print(f"Network: 64 -> 16 -> 10, parameters: {sum(p.data.size for p in parameters)}")
-    print(f"Adam: lr={learning_rate}, betas={optimiser.betas}, eps={optimiser.eps}") 
+    print(f"Adam: lr={learning_rate}, betas={optimiser.betas}, eps={optimiser.eps}")
     print(f"Seed: {seed}, epochs: {epochs}, batch size: {batch_size}")
     initial_loss, initial_accuracy, _ = evaluate(model, train_x, train_y, loss_function)
     print(f"Before training: loss={initial_loss:.4f}, accuracy={initial_accuracy:.2%}")
