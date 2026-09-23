@@ -178,22 +178,28 @@ def compare_layer_norm(rng):
     print(f"LayerNorm                gradient error: {largest_error:.2e}")
 
 
-def compare_self_attention(rng, causal=False):
+def compare_self_attention(rng, causal=False, num_heads=1):
     """checks attention outputs + input and projection gradients"""
     largest_output_error = 0.0
     largest_gradient_error = 0.0
-    for shape in ((3, 4), (2, 3, 4), (2, 1, 4), (2, 3, 1)):
-        layer = SelfAttention(shape[-1], rng=rng, causal=causal)
-        projections = (layer.query, layer.key, layer.value)
-        references = [
-            torch.nn.Linear(shape[-1], shape[-1], dtype=torch.float64)
-            for _ in projections
-        ]
+    for shape in ((3, 4), (2, 3, 4), (2, 1, 4), (2, 3, num_heads)):
+        layer = SelfAttention(shape[-1], rng=rng, causal=causal, num_heads=num_heads)
+        projections = (layer.query, layer.key, layer.value, layer.output)
+        reference = torch.nn.MultiheadAttention(
+            shape[-1], num_heads, dropout=0.0, batch_first=True, dtype=torch.float64
+        )
         with torch.no_grad():
-            for projection, reference in zip(projections, references):
+            for projection in projections:
                 projection.bias.data[:] = rng.normal(scale=0.1, size=shape[-1])
-                reference.weight.copy_(torch.tensor(projection.weight.data.T))
-                reference.bias.copy_(torch.tensor(projection.bias.data))
+            # PyTorch stores query, key + value parameters together
+            reference.in_proj_weight.copy_(torch.tensor(np.concatenate(
+                [p.weight.data.T for p in projections[:3]]
+            )))
+            reference.in_proj_bias.copy_(torch.tensor(np.concatenate(
+                [p.bias.data for p in projections[:3]]
+            )))
+            reference.out_proj.weight.copy_(torch.tensor(layer.output.weight.data.T))
+            reference.out_proj.bias.copy_(torch.tensor(layer.output.bias.data))
         assert layer.parameters() == [
             p for projection in projections for p in projection.parameters()
         ]
@@ -202,9 +208,9 @@ def compare_self_attention(rng, causal=False):
         x = Tensor(values, requires_grad=True)
         torch_x = torch.tensor(values, requires_grad=True)
         output = layer(x)
-        queries, keys, projected_values = [reference(torch_x) for reference in references]
-        expected = torch.nn.functional.scaled_dot_product_attention(
-            queries, keys, projected_values, dropout_p=0.0, is_causal=causal
+        mask = torch.ones(shape[-2], shape[-2], dtype=torch.bool).triu(1) if causal else None
+        expected, _ = reference(
+            torch_x, torch_x, torch_x, attn_mask=mask, need_weights=False
         )
         assert output.shape == shape
         expected_values = expected.detach().numpy()
@@ -219,16 +225,18 @@ def compare_self_attention(rng, causal=False):
                 output.data[0], layer(Tensor(values[0])).data, rtol=1e-9, atol=1e-10
             )
         if shape[-2] == 1:
-            np.testing.assert_allclose(output.data, layer.value(x).data)
+            np.testing.assert_allclose(output.data, layer.output(layer.value(x)).data)
 
         weights = rng.normal(size=shape)
         (output * weights).sum().backward()
         (expected * torch.tensor(weights)).sum().backward()
         pairs = [(x.grad, torch_x.grad.numpy())]
-        for projection, reference in zip(projections, references):
+        weight_grads = list(reference.in_proj_weight.grad.chunk(3)) + [reference.out_proj.weight.grad]
+        bias_grads = list(reference.in_proj_bias.grad.chunk(3)) + [reference.out_proj.bias.grad]
+        for projection, weight_grad, bias_grad in zip(projections, weight_grads, bias_grads):
             pairs.extend((
-                (projection.weight.grad, reference.weight.grad.numpy().T),
-                (projection.bias.grad, reference.bias.grad.numpy()),
+                (projection.weight.grad, weight_grad.numpy().T),
+                (projection.bias.grad, bias_grad.numpy()),
             ))
         for actual, target in pairs:
             np.testing.assert_allclose(actual, target, rtol=1e-9, atol=1e-10)
@@ -237,7 +245,9 @@ def compare_self_attention(rng, causal=False):
             )
 
         if causal:
-            np.testing.assert_allclose(output.data[..., 0, :], layer.value(x).data[..., 0, :])
+            np.testing.assert_allclose(
+                output.data[..., 0, :], layer.output(layer.value(x)).data[..., 0, :]
+            )
             for stop in range(1, shape[-2]):
                 # changing future tokens must not affect earlier outputs
                 changed = values.copy()
@@ -253,7 +263,7 @@ def compare_self_attention(rng, causal=False):
 
     name = "causal self-attention" if causal else "self-attention"
     print(
-        f"{name:<24} output error: {largest_output_error:.2e}, "
+        f"{name}, heads={num_heads}  output error: {largest_output_error:.2e}, "
         f"gradient error: {largest_gradient_error:.2e}"
     )
 
@@ -501,8 +511,9 @@ def main():
     compare_adam_state()
     compare_embedding(rng)
     compare_layer_norm(rng)
-    compare_self_attention(rng)
-    compare_self_attention(rng, causal=True)
+    for num_heads in (1, 2, 4):
+        compare_self_attention(rng, num_heads=num_heads)
+        compare_self_attention(rng, causal=True, num_heads=num_heads)
 
     print(f"all comparisons passed using PyTorch {torch.__version__}.")
 

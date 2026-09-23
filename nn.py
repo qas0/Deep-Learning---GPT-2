@@ -146,37 +146,52 @@ class LayerNorm(Module):
 
 
 class SelfAttention(Module):
-    """mixes token information using one head"""
+    """mixes token information across attention heads"""
 
-    def __init__(self, embedding_dim, rng=None, causal=False):
+    def __init__(self, embedding_dim, rng=None, causal=False, num_heads=1):
+        if isinstance(num_heads, bool) or not isinstance(num_heads, (int, np.integer)):
+            raise TypeError("head count must be an integer")
+        if num_heads <= 0:
+            raise ValueError("head count must be positive")
         rng = np.random.default_rng() if rng is None else rng
         self.query = Linear(embedding_dim, embedding_dim, rng=rng)
         self.key = Linear(embedding_dim, embedding_dim, rng=rng)
         self.value = Linear(embedding_dim, embedding_dim, rng=rng)
+        if embedding_dim % num_heads != 0:
+            raise ValueError("embedding dimension must be divisible by head count")
+        self.output = Linear(embedding_dim, embedding_dim, rng=rng)
         self.embedding_dim = embedding_dim
+        self.num_heads = num_heads
+        self.head_dim = embedding_dim // num_heads
         self.causal = causal
 
     def forward(self, x):
         if len(x.shape) not in (2, 3) or x.shape[-2] == 0:
-            raise ValueError(
-                
-            )
+            raise ValueError("expected a sequence or batch with at least one token")
 
-        queries = self.query(x)
-        keys = self.key(x)
-        values = self.value(x)
+        batch = x.shape[0] if len(x.shape) == 3 else 1
+        tokens = x.shape[-2]
 
-        # swaps token and feature axes keeping batches separate
-        transposed_keys = keys.T if len(x.shape) == 2 else keys.transpose(0, 2, 1)
+        def split_heads(values):
+            # gives each head its own features: (batch, heads, tokens, head_dim)
+            return values.reshape(batch, tokens, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
+
+        queries = split_heads(self.query(x))
+        keys = split_heads(self.key(x))
+        values = split_heads(self.value(x))
+
+        # swaps token and feature axes keeping batches and heads separate
+        transposed_keys = keys.transpose(0, 1, 3, 2)
         # scales scores so larger feature counts dont make softmax too sharp
-        scores = (queries @ transposed_keys) / self.embedding_dim**0.5
+        scores = (queries @ transposed_keys) / self.head_dim**0.5
         if self.causal:
             # future scores become -inf so their softmax weights are 0
-            tokens = x.shape[-2]
             mask = np.triu(np.full((tokens, tokens), -np.inf), k=1)
             scores = scores + mask
         weights = scores.softmax(axis=-1)
-        return weights @ values
+        # joins the heads back into each tokens feature vector
+        combined = (weights @ values).transpose(0, 2, 1, 3).reshape(x.shape)
+        return self.output(combined)
 
 
 class ReLU(Module):
