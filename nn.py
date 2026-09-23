@@ -145,6 +145,40 @@ class LayerNorm(Module):
         return normalised * self.weight + self.bias
 
 
+class SelfAttention(Module):
+    """mixes token information using one head"""
+
+    def __init__(self, embedding_dim, rng=None, causal=False):
+        rng = np.random.default_rng() if rng is None else rng
+        self.query = Linear(embedding_dim, embedding_dim, rng=rng)
+        self.key = Linear(embedding_dim, embedding_dim, rng=rng)
+        self.value = Linear(embedding_dim, embedding_dim, rng=rng)
+        self.embedding_dim = embedding_dim
+        self.causal = causal
+
+    def forward(self, x):
+        if len(x.shape) not in (2, 3) or x.shape[-2] == 0:
+            raise ValueError(
+                
+            )
+
+        queries = self.query(x)
+        keys = self.key(x)
+        values = self.value(x)
+
+        # swaps token and feature axes keeping batches separate
+        transposed_keys = keys.T if len(x.shape) == 2 else keys.transpose(0, 2, 1)
+        # scales scores so larger feature counts dont make softmax too sharp
+        scores = (queries @ transposed_keys) / self.embedding_dim**0.5
+        if self.causal:
+            # future scores become -inf so their softmax weights are 0
+            tokens = x.shape[-2]
+            mask = np.triu(np.full((tokens, tokens), -np.inf), k=1)
+            scores = scores + mask
+        weights = scores.softmax(axis=-1)
+        return weights @ values
+
+
 class ReLU(Module):
     """applies ReLU to each value, keeping positive values + replacing negatives with 0"""
 

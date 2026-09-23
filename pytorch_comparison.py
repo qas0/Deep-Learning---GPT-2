@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 from tensor import Tensor
-from nn import Parameter, Linear, Embedding, LayerNorm, ReLU, GELU, Softmax, CrossEntropyLoss
+from nn import Parameter, Linear, Embedding, LayerNorm, SelfAttention, ReLU, GELU, Softmax, CrossEntropyLoss
 from optim import SGD, Adam
 
 
@@ -95,7 +95,6 @@ def compare_linear(rng):
 
 
 def compare_embedding(rng):
-    """checks row lookups + repeated ID gradients against PyTorch"""
     layer = Embedding(6, 4, rng=rng)
     reference = torch.nn.Embedding(6, 4, dtype=torch.float64)
     with torch.no_grad():
@@ -119,7 +118,6 @@ def compare_embedding(rng):
         np.testing.assert_array_equal(output.data, layer.weight.data[ids])
         np.testing.assert_array_equal(output.data, expected.detach().numpy())
 
-        # changing the caller's IDs must not change the lookup used in backward
         ids[...] = 1
         weights = rng.normal(size=output.shape)
         (output * weights).sum().backward()
@@ -178,6 +176,86 @@ def compare_layer_norm(rng):
             largest_error = max(largest_error, float(np.max(np.abs(actual - target))))
 
     print(f"LayerNorm                gradient error: {largest_error:.2e}")
+
+
+def compare_self_attention(rng, causal=False):
+    """checks attention outputs + input and projection gradients"""
+    largest_output_error = 0.0
+    largest_gradient_error = 0.0
+    for shape in ((3, 4), (2, 3, 4), (2, 1, 4), (2, 3, 1)):
+        layer = SelfAttention(shape[-1], rng=rng, causal=causal)
+        projections = (layer.query, layer.key, layer.value)
+        references = [
+            torch.nn.Linear(shape[-1], shape[-1], dtype=torch.float64)
+            for _ in projections
+        ]
+        with torch.no_grad():
+            for projection, reference in zip(projections, references):
+                projection.bias.data[:] = rng.normal(scale=0.1, size=shape[-1])
+                reference.weight.copy_(torch.tensor(projection.weight.data.T))
+                reference.bias.copy_(torch.tensor(projection.bias.data))
+        assert layer.parameters() == [
+            p for projection in projections for p in projection.parameters()
+        ]
+
+        values = rng.normal(size=shape)
+        x = Tensor(values, requires_grad=True)
+        torch_x = torch.tensor(values, requires_grad=True)
+        output = layer(x)
+        queries, keys, projected_values = [reference(torch_x) for reference in references]
+        expected = torch.nn.functional.scaled_dot_product_attention(
+            queries, keys, projected_values, dropout_p=0.0, is_causal=causal
+        )
+        assert output.shape == shape
+        expected_values = expected.detach().numpy()
+        np.testing.assert_allclose(output.data, expected_values, rtol=1e-9, atol=1e-10)
+        largest_output_error = max(
+            largest_output_error, float(np.max(np.abs(output.data - expected_values)))
+        )
+
+        
+        if len(shape) == 3:
+            np.testing.assert_allclose(
+                output.data[0], layer(Tensor(values[0])).data, rtol=1e-9, atol=1e-10
+            )
+        if shape[-2] == 1:
+            np.testing.assert_allclose(output.data, layer.value(x).data)
+
+        weights = rng.normal(size=shape)
+        (output * weights).sum().backward()
+        (expected * torch.tensor(weights)).sum().backward()
+        pairs = [(x.grad, torch_x.grad.numpy())]
+        for projection, reference in zip(projections, references):
+            pairs.extend((
+                (projection.weight.grad, reference.weight.grad.numpy().T),
+                (projection.bias.grad, reference.bias.grad.numpy()),
+            ))
+        for actual, target in pairs:
+            np.testing.assert_allclose(actual, target, rtol=1e-9, atol=1e-10)
+            largest_gradient_error = max(
+                largest_gradient_error, float(np.max(np.abs(actual - target)))
+            )
+
+        if causal:
+            np.testing.assert_allclose(output.data[..., 0, :], layer.value(x).data[..., 0, :])
+            for stop in range(1, shape[-2]):
+                # changing future tokens must not affect earlier outputs
+                changed = values.copy()
+                changed[..., stop:, :] += rng.normal(size=changed[..., stop:, :].shape) * 10
+                np.testing.assert_allclose(
+                    layer(Tensor(changed)).data[..., :stop, :],
+                    output.data[..., :stop, :], rtol=1e-9, atol=1e-10,
+                )
+                layer.zero_grad()
+                x.grad.fill(0.0)
+                (layer(x)[..., :stop, :] * weights[..., :stop, :]).sum().backward()
+                np.testing.assert_array_equal(x.grad[..., stop:, :], 0.0)
+
+    name = "causal self-attention" if causal else "self-attention"
+    print(
+        f"{name:<24} output error: {largest_output_error:.2e}, "
+        f"gradient error: {largest_gradient_error:.2e}"
+    )
 
 
 def compare_activations():
@@ -423,6 +501,8 @@ def main():
     compare_adam_state()
     compare_embedding(rng)
     compare_layer_norm(rng)
+    compare_self_attention(rng)
+    compare_self_attention(rng, causal=True)
 
     print(f"all comparisons passed using PyTorch {torch.__version__}.")
 
