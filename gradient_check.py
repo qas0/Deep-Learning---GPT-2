@@ -140,6 +140,16 @@ def main():
     )
     check_repeated_backward()
 
+    values = rng.normal(size=(2, 3, 4))
+    for axis, keepdims in ((0, False), (-1, True), ((0, -1), False), (None, True), ((), False)):
+        weights = rng.normal(size=values.sum(axis=axis, keepdims=keepdims).shape)
+        for operation in ("sum", "mean"):
+            check_gradients(
+                f"{operation} {axis} keep={keepdims}",
+                lambda x: (getattr(x, operation)(axis=axis, keepdims=keepdims) * weights).sum(),
+                [values],
+            )
+
     print("All gradient checks passed.")
 
 

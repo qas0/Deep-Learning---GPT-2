@@ -89,6 +89,62 @@ class Linear(Module):
         return x @ self.weight + self.bias
 
 
+class Embedding(Module):
+    """maps integer IDs shaped (...) to vectors shaped (..., embedding_dim)"""
+
+    def __init__(self, num_embeddings, embedding_dim, rng=None):
+        for size in (num_embeddings, embedding_dim):
+            if isinstance(size, bool) or not isinstance(size, (int, np.integer)):
+                raise TypeError("embedding sizes must be integers")
+            if size <= 0:
+                raise ValueError("embedding sizes must be positive")
+
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        rng = np.random.default_rng() if rng is None else rng
+        self.weight = Parameter(
+            rng.normal(0.0, 0.02, size=(num_embeddings, embedding_dim))
+        )
+
+    def forward(self, token_ids):
+        # copies IDs so changing the input later doesnt redirect gradients
+        token_ids = np.array(token_ids, copy=True)
+        if not np.issubdtype(token_ids.dtype, np.integer):
+            raise TypeError("token IDs must be integers")
+        if np.any(token_ids < 0) or np.any(token_ids >= self.num_embeddings):
+            raise ValueError("token ID is out of range")
+
+        return self.weight[token_ids]
+
+
+class LayerNorm(Module):
+    """normalises the final feature dimension with learned scale + bias"""
+
+    def __init__(self, num_features, eps=1e-5):
+        if isinstance(num_features, bool) or not isinstance(num_features, (int, np.integer)):
+            raise TypeError("feature count must be an integer")
+        if num_features <= 0:
+            raise ValueError("feature count must be positive")
+        if not np.isfinite(eps) or eps <= 0:
+            raise ValueError("eps must be finite and positive")
+
+        self.num_features = num_features
+        self.eps = eps
+        self.weight = Parameter(np.ones(num_features))
+        self.bias = Parameter(np.zeros(num_features))
+
+    def forward(self, x):
+        if not x.shape or x.shape[-1] != self.num_features:
+            raise ValueError(f"expected final input dimension {self.num_features}")
+
+        # keeps each tokens statistics separate from the other tokens
+        centred = x - x.mean(axis=-1, keepdims=True)
+        variance = (centred**2).mean(axis=-1, keepdims=True)
+        # eps stops division by zero when the features have no variation
+        normalised = centred / (variance + self.eps)**0.5
+        return normalised * self.weight + self.bias
+
+
 class ReLU(Module):
     """applies ReLU to each value, keeping positive values + replacing negatives with 0"""
 

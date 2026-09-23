@@ -332,9 +332,9 @@ class Tensor:
 
     # handles sum, mean, and backpropogation
 
-    def sum(self):
+    def sum(self, axis=None, keepdims=False):
         result = Tensor(
-            self.data.sum(),
+            self.data.sum(axis=axis, keepdims=keepdims),
             requires_grad=self.requires_grad,
             _children=(self,),
         )
@@ -342,13 +342,22 @@ class Tensor:
         # every input gets the same incoming grad
         def _backward():
             if self.requires_grad:
-                self.grad += result.grad
+                gradient = result.grad
+                # restores reduced dimensions so gradients broadcast to the input
+                if axis is not None and not keepdims and self.data.ndim > 0:
+                    gradient = np.expand_dims(gradient, axis=axis)
+                self.grad += gradient
 
         result._backward = _backward
         return result
 
-    def mean(self):
-        return self.sum() / self.data.size
+    def mean(self, axis=None, keepdims=False):
+        total = self.sum(axis=axis, keepdims=keepdims)
+        count = self.data.size
+        if axis is not None and self.data.ndim > 0:
+            axes = axis if isinstance(axis, tuple) else (axis,)
+            count = np.prod([self.shape[a] for a in axes])
+        return total / count
 
     def backward(self):
         """works backwards from a single output val to calculate grad"""

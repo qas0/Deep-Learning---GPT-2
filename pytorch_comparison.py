@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 from tensor import Tensor
-from nn import Parameter, Linear, ReLU, GELU, Softmax, CrossEntropyLoss
+from nn import Parameter, Linear, Embedding, LayerNorm, ReLU, GELU, Softmax, CrossEntropyLoss
 from optim import SGD, Adam
 
 
@@ -92,6 +92,92 @@ def compare_linear(rng):
         layer.zero_grad()
         assert all(np.all(p.grad == 0) for p in layer.parameters())
         print(f"linear {str(shape):<17} gradient error: {largest_error:.2e}")
+
+
+def compare_embedding(rng):
+    """checks row lookups + repeated ID gradients against PyTorch"""
+    layer = Embedding(6, 4, rng=rng)
+    reference = torch.nn.Embedding(6, 4, dtype=torch.float64)
+    with torch.no_grad():
+        reference.weight.copy_(torch.tensor(layer.weight.data))
+    assert layer.parameters() == [layer.weight]
+
+    cases = (
+        np.array(2),
+        np.array([0, 2, 2, 5]),
+        np.array([[2, 2, 0], [5, 2, 5]]),
+        np.full((2, 2), 2),
+        np.empty((0, 3), dtype=int),
+    )
+    largest_error = 0.0
+    for ids in cases:
+        layer.zero_grad()
+        reference.zero_grad()
+        output = layer(ids)
+        expected = reference(torch.tensor(ids, dtype=torch.long))
+        assert output.shape == ids.shape + (4,)
+        np.testing.assert_array_equal(output.data, layer.weight.data[ids])
+        np.testing.assert_array_equal(output.data, expected.detach().numpy())
+
+        # changing the caller's IDs must not change the lookup used in backward
+        ids[...] = 1
+        weights = rng.normal(size=output.shape)
+        (output * weights).sum().backward()
+        (expected * torch.tensor(weights)).sum().backward()
+        expected_gradient = reference.weight.grad.numpy()
+        np.testing.assert_allclose(
+            layer.weight.grad, expected_gradient, rtol=1e-9, atol=1e-10
+        )
+        largest_error = max(
+            largest_error, float(np.max(np.abs(layer.weight.grad - expected_gradient)))
+        )
+
+    print(f"embedding                gradient error: {largest_error:.2e}")
+
+
+def compare_layer_norm(rng):
+    """checks normalised outputs + input, scale and bias gradients"""
+    cases = (
+        (rng.normal(size=(4,)), 1e-5),
+        (rng.normal(size=(3, 4)), 1e-5),
+        (rng.normal(size=(2, 3, 4)), 1e-5),
+        (np.full((2, 4), 3.0), 1e-5),
+        (3.0 + rng.normal(scale=1e-7, size=(2, 4)), 1e-3),
+        (rng.normal(size=(2, 1)), 1e-5),
+    )
+    largest_error = 0.0
+    for values, eps in cases:
+        layer = LayerNorm(values.shape[-1], eps=eps)
+        reference = torch.nn.LayerNorm(values.shape[-1], eps=eps, dtype=torch.float64)
+        assert layer.parameters() == [layer.weight, layer.bias]
+        np.testing.assert_array_equal(layer.weight.data, np.ones(values.shape[-1]))
+        np.testing.assert_array_equal(layer.bias.data, np.zeros(values.shape[-1]))
+
+        # checks learned scale + bias too, instead of only their starting values
+        layer.weight.data[:] = rng.normal(size=layer.weight.shape)
+        layer.bias.data[:] = rng.normal(size=layer.bias.shape)
+        with torch.no_grad():
+            reference.weight.copy_(torch.tensor(layer.weight.data))
+            reference.bias.copy_(torch.tensor(layer.bias.data))
+
+        x = Tensor(values, requires_grad=True)
+        torch_x = torch.tensor(values, requires_grad=True)
+        output = layer(x)
+        expected = reference(torch_x)
+        assert output.shape == values.shape
+        np.testing.assert_allclose(output.data, expected.detach().numpy(), rtol=1e-9, atol=1e-10)
+        weights = rng.normal(size=values.shape)
+        (output * weights).sum().backward()
+        (expected * torch.tensor(weights)).sum().backward()
+        for actual, target in (
+            (x.grad, torch_x.grad.numpy()),
+            (layer.weight.grad, reference.weight.grad.numpy()),
+            (layer.bias.grad, reference.bias.grad.numpy()),
+        ):
+            np.testing.assert_allclose(actual, target, rtol=1e-9, atol=1e-10)
+            largest_error = max(largest_error, float(np.max(np.abs(actual - target))))
+
+    print(f"LayerNorm                gradient error: {largest_error:.2e}")
 
 
 def compare_activations():
@@ -335,6 +421,8 @@ def main():
     compare_cross_entropy(rng)
     compare_optimisers(rng)
     compare_adam_state()
+    compare_embedding(rng)
+    compare_layer_norm(rng)
 
     print(f"all comparisons passed using PyTorch {torch.__version__}.")
 
