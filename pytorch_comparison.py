@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 from tensor import Tensor
-from nn import Parameter, Linear, Embedding, LayerNorm, SelfAttention, FeedForward, ReLU, GELU, Softmax, CrossEntropyLoss
+from nn import Parameter, Linear, Embedding, LayerNorm, SelfAttention, FeedForward, TransformerBlock, ReLU, GELU, Softmax, CrossEntropyLoss
 from optim import SGD, Adam
 
 
@@ -178,6 +178,21 @@ def compare_layer_norm(rng):
     print(f"LayerNorm                gradient error: {largest_error:.2e}")
 
 
+def check_causality(layer, x, output, weights, rng):
+    for stop in range(1, x.shape[-2]):
+        # changing future tokens must not affect earlier outputs
+        changed = x.data.copy()
+        changed[..., stop:, :] += rng.normal(size=changed[..., stop:, :].shape) * 10
+        np.testing.assert_allclose(
+            layer(Tensor(changed)).data[..., :stop, :],
+            output.data[..., :stop, :], rtol=1e-9, atol=1e-10,
+        )
+        layer.zero_grad()
+        x.grad.fill(0.0)
+        (layer(x)[..., :stop, :] * weights[..., :stop, :]).sum().backward()
+        np.testing.assert_array_equal(x.grad[..., stop:, :], 0.0)
+
+
 def compare_self_attention(rng, causal=False, num_heads=1):
     """checks attention outputs + input and projection gradients"""
     largest_output_error = 0.0
@@ -248,18 +263,7 @@ def compare_self_attention(rng, causal=False, num_heads=1):
             np.testing.assert_allclose(
                 output.data[..., 0, :], layer.output(layer.value(x)).data[..., 0, :]
             )
-            for stop in range(1, shape[-2]):
-                # changing future tokens must not affect earlier outputs
-                changed = values.copy()
-                changed[..., stop:, :] += rng.normal(size=changed[..., stop:, :].shape) * 10
-                np.testing.assert_allclose(
-                    layer(Tensor(changed)).data[..., :stop, :],
-                    output.data[..., :stop, :], rtol=1e-9, atol=1e-10,
-                )
-                layer.zero_grad()
-                x.grad.fill(0.0)
-                (layer(x)[..., :stop, :] * weights[..., :stop, :]).sum().backward()
-                np.testing.assert_array_equal(x.grad[..., stop:, :], 0.0)
+            check_causality(layer, x, output, weights, rng)
 
     name = "causal self-attention" if causal else "self-attention"
     print(
@@ -310,6 +314,81 @@ def compare_feed_forward(rng):
             largest_error = max(largest_error, float(np.max(np.abs(actual - target))))
 
     print(f"feed-forward             gradient error: {largest_error:.2e}")
+
+
+def compare_transformer_block(rng):
+    # checks the layers together, including both residual connections
+    largest_error = 0.0
+    for shape, hidden_dim, eps in (((3, 4), None, 1e-5), ((2, 3, 4), 7, 1e-3), ((2, 1, 4), None, 1e-5)):
+        block = TransformerBlock(4, num_heads=2, hidden_dim=hidden_dim, eps=eps, rng=rng)
+        reference = torch.nn.TransformerEncoderLayer(
+            4, 2, dim_feedforward=16 if hidden_dim is None else hidden_dim,
+            dropout=0.0, activation=torch.nn.GELU(approximate="tanh"),
+            layer_norm_eps=eps, batch_first=True, norm_first=True, dtype=torch.float64,
+        )
+        modules = (
+            (block.norm1, reference.norm1),
+            (block.norm2, reference.norm2),
+            (block.attention.output, reference.self_attn.out_proj),
+            (block.feed_forward.expansion, reference.linear1),
+            (block.feed_forward.projection, reference.linear2),
+        )
+        projections = (block.attention.query, block.attention.key, block.attention.value)
+        with torch.no_grad():
+            for custom, expected in modules:
+                expected.weight.copy_(torch.tensor(
+                    custom.weight.data.T if isinstance(custom, Linear) else custom.weight.data
+                ))
+                expected.bias.copy_(torch.tensor(custom.bias.data))
+            reference.self_attn.in_proj_weight.copy_(torch.tensor(np.concatenate(
+                [p.weight.data.T for p in projections]
+            )))
+            reference.self_attn.in_proj_bias.copy_(torch.tensor(np.concatenate(
+                [p.bias.data for p in projections]
+            )))
+        assert len(block.parameters()) == 16
+
+        x = Tensor(rng.normal(size=shape), requires_grad=True)
+        torch_x = torch.tensor(x.data, requires_grad=True)
+        output = block(x)
+        mask = torch.ones(shape[-2], shape[-2], dtype=torch.bool).triu(1)
+        expected_output = reference(torch_x, src_mask=mask)
+        assert output.shape == shape
+        np.testing.assert_allclose(
+            output.data, expected_output.detach().numpy(), rtol=1e-9, atol=1e-10
+        )
+        weights = rng.normal(size=shape)
+        (output * weights).sum().backward()
+        (expected_output * torch.tensor(weights)).sum().backward()
+        pairs = [(x.grad, torch_x.grad.numpy())]
+        for custom, expected in modules:
+            weight_grad = expected.weight.grad.numpy()
+            pairs.extend((
+                (custom.weight.grad, weight_grad.T if isinstance(custom, Linear) else weight_grad),
+                (custom.bias.grad, expected.bias.grad.numpy()),
+            ))
+        for custom, weight_grad, bias_grad in zip(
+            projections, reference.self_attn.in_proj_weight.grad.chunk(3),
+            reference.self_attn.in_proj_bias.grad.chunk(3),
+        ):
+            pairs.extend(((custom.weight.grad, weight_grad.numpy().T), (custom.bias.grad, bias_grad.numpy())))
+        for actual, target in pairs:
+            np.testing.assert_allclose(actual, target, rtol=1e-9, atol=1e-10)
+            largest_error = max(largest_error, float(np.max(np.abs(actual - target))))
+        check_causality(block, x, output, weights, rng)
+
+        # zero layer outputs leave only the direct residual paths
+        for layer in (block.attention.output, block.feed_forward.projection):
+            layer.weight.data.fill(0.0)
+            layer.bias.data.fill(0.0)
+        block.zero_grad()
+        x.grad.fill(0.0)
+        identity = block(x)
+        np.testing.assert_array_equal(identity.data, x.data)
+        (identity * weights).sum().backward()
+        np.testing.assert_allclose(x.grad, weights, rtol=1e-9, atol=1e-10)
+
+    print(f"transformer block        gradient error: {largest_error:.2e}")
 
 
 def compare_activations():
@@ -559,6 +638,7 @@ def main():
         compare_self_attention(rng, num_heads=num_heads)
         compare_self_attention(rng, causal=True, num_heads=num_heads)
     compare_feed_forward(rng)
+    compare_transformer_block(rng)
 
     print(f"all comparisons passed using PyTorch {torch.__version__}.")
 

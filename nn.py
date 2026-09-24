@@ -220,6 +220,21 @@ class FeedForward(Module):
         return self.projection(self.activation(self.expansion(x)))
 
 
+class TransformerBlock(Module):
+    # normalises before each layer + adds its input back afterwards
+
+    def __init__(self, embedding_dim, num_heads=1, hidden_dim=None, eps=1e-5, rng=None):
+        rng = np.random.default_rng() if rng is None else rng
+        self.norm1 = LayerNorm(embedding_dim, eps=eps)
+        self.attention = SelfAttention(embedding_dim, rng=rng, causal=True, num_heads=num_heads)
+        self.norm2 = LayerNorm(embedding_dim, eps=eps)
+        self.feed_forward = FeedForward(embedding_dim, hidden_dim=hidden_dim, rng=rng)
+
+    def forward(self, x):
+        x = x + self.attention(self.norm1(x))
+        return x + self.feed_forward(self.norm2(x))
+
+
 class Softmax(Module):
     """applies softmax along axis to turn scores into probabilities"""
 
