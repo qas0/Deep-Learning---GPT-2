@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 from tensor import Tensor
-from nn import Parameter, Linear, Embedding, LayerNorm, SelfAttention, ReLU, GELU, Softmax, CrossEntropyLoss
+from nn import Parameter, Linear, Embedding, LayerNorm, SelfAttention, FeedForward, ReLU, GELU, Softmax, CrossEntropyLoss
 from optim import SGD, Adam
 
 
@@ -268,6 +268,50 @@ def compare_self_attention(rng, causal=False, num_heads=1):
     )
 
 
+def compare_feed_forward(rng):
+    # checks the combined linear, GELU + projection calculation
+    largest_error = 0.0
+    for shape, hidden_dim in (((3,), None), ((4, 3), None), ((2, 4, 3), None), ((2, 4, 3), 5)):
+        layer = FeedForward(3, hidden_dim=hidden_dim, rng=rng)
+        width = 12 if hidden_dim is None else hidden_dim
+        reference = torch.nn.Sequential(
+            torch.nn.Linear(3, width, dtype=torch.float64),
+            torch.nn.GELU(approximate="tanh"),
+            torch.nn.Linear(width, 3, dtype=torch.float64),
+        )
+        linears = ((layer.expansion, reference[0]), (layer.projection, reference[2]))
+        with torch.no_grad():
+            for custom, expected in linears:
+                custom.bias.data[:] = rng.normal(scale=0.1, size=custom.bias.shape)
+                expected.weight.copy_(torch.tensor(custom.weight.data.T))
+                expected.bias.copy_(torch.tensor(custom.bias.data))
+        assert layer.parameters() == [p for custom, _ in linears for p in custom.parameters()]
+
+        values = rng.normal(size=shape)
+        x = Tensor(values, requires_grad=True)
+        torch_x = torch.tensor(values, requires_grad=True)
+        output = layer(x)
+        expected_output = reference(torch_x)
+        assert output.shape == shape
+        np.testing.assert_allclose(
+            output.data, expected_output.detach().numpy(), rtol=1e-9, atol=1e-10
+        )
+        weights = rng.normal(size=shape)
+        (output * weights).sum().backward()
+        (expected_output * torch.tensor(weights)).sum().backward()
+        pairs = [(x.grad, torch_x.grad.numpy())]
+        for custom, expected in linears:
+            pairs.extend((
+                (custom.weight.grad, expected.weight.grad.numpy().T),
+                (custom.bias.grad, expected.bias.grad.numpy()),
+            ))
+        for actual, target in pairs:
+            np.testing.assert_allclose(actual, target, rtol=1e-9, atol=1e-10)
+            largest_error = max(largest_error, float(np.max(np.abs(actual - target))))
+
+    print(f"feed-forward             gradient error: {largest_error:.2e}")
+
+
 def compare_activations():
     """checks activation outputs + gradients against PyTorch, including 0 and large positive or negative inputs"""
     values = np.array([-20, -8, -3, -1, -0.1, -1e-8, 0, 1e-8, 0.1, 1, 3, 20])
@@ -514,6 +558,7 @@ def main():
     for num_heads in (1, 2, 4):
         compare_self_attention(rng, num_heads=num_heads)
         compare_self_attention(rng, causal=True, num_heads=num_heads)
+    compare_feed_forward(rng)
 
     print(f"all comparisons passed using PyTorch {torch.__version__}.")
 

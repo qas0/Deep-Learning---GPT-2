@@ -206,6 +206,20 @@ class GELU(Module):
         return x.gelu()
 
 
+class FeedForward(Module):
+    # expands each tokens features, applies GELU + projects back
+
+    def __init__(self, embedding_dim, hidden_dim=None, rng=None):
+        hidden_dim = 4 * embedding_dim if hidden_dim is None else hidden_dim
+        rng = np.random.default_rng() if rng is None else rng
+        self.expansion = Linear(embedding_dim, hidden_dim, rng=rng)
+        self.activation = GELU()
+        self.projection = Linear(hidden_dim, embedding_dim, rng=rng)
+
+    def forward(self, x):
+        return self.projection(self.activation(self.expansion(x)))
+
+
 class Softmax(Module):
     """applies softmax along axis to turn scores into probabilities"""
 
