@@ -2,8 +2,9 @@ import numpy as np
 import torch
 
 from tensor import Tensor
-from nn import Parameter, Linear, Embedding, LayerNorm, SelfAttention, FeedForward, TransformerBlock, GPT, ReLU, GELU, Softmax, CrossEntropyLoss
+from nn import Parameter, Linear, Embedding, LayerNorm, SelfAttention, FeedForward, TransformerBlock, ReLU, GELU, Softmax, CrossEntropyLoss
 from optim import SGD, Adam
+from model import GPT
 
 
 def compare_gradients(name, custom_function, torch_function, inputs):
@@ -402,13 +403,11 @@ def compare_gpt(rng):
         token_embedding = torch.nn.Embedding(7, 4, dtype=torch.float64)
         position_embedding = torch.nn.Embedding(4, 4, dtype=torch.float64)
         norm = torch.nn.LayerNorm(4, dtype=torch.float64)
-        output_weight = torch.tensor(model.output_weight.data, requires_grad=True)
         pairs = (
             (model.token_embedding.weight, token_embedding.weight),
             (model.position_embedding.weight, position_embedding.weight),
             (model.norm.weight, norm.weight),
             (model.norm.bias, norm.bias),
-            (model.output_weight, output_weight),
         )
         with torch.no_grad():
             for custom, expected in pairs:
@@ -418,7 +417,9 @@ def compare_gpt(rng):
             reference, block_mappings = torch_block_reference(block)
             references.append(reference)
             mappings.extend(block_mappings)
-        assert set(model.parameters()) == (
+        parameters = model.parameters()
+        assert len(parameters) == len(pairs) + len(mappings)
+        assert set(parameters) == (
             {custom for custom, _ in pairs} | {custom for custom, _, _ in mappings}
         )
 
@@ -428,7 +429,7 @@ def compare_gpt(rng):
         mask = torch.ones(ids.shape[-1], ids.shape[-1], dtype=torch.bool).triu(1)
         for reference in references:
             expected = reference(expected, src_mask=mask)
-        expected = norm(expected) @ output_weight
+        expected = norm(expected) @ token_embedding.weight.T
         assert output.shape == ids.shape + (7,)
         np.testing.assert_allclose(output.data, expected.detach().numpy(), rtol=1e-9, atol=1e-10)
 
@@ -445,6 +446,13 @@ def compare_gpt(rng):
             np.testing.assert_allclose(actual, target, rtol=1e-9, atol=1e-10)
             largest_error = max(largest_error, float(np.max(np.abs(actual - target))))
 
+        before = model.token_embedding.weight.data.copy()
+        SGD(parameters, lr=0.01).step()
+        np.testing.assert_allclose(
+            model.token_embedding.weight.data,
+            before - 0.01 * token_embedding.weight.grad.numpy(), rtol=1e-9, atol=1e-10,
+        )
+        output = model(ids)
         for stop in range(1, ids.shape[-1]):
             changed = ids.copy()
             changed[..., stop:] = (changed[..., stop:] + 1) % model.vocab_size
@@ -456,7 +464,7 @@ def compare_gpt(rng):
             CrossEntropyLoss()(model(ids)[..., :stop, :], targets[..., :stop]).backward()
             np.testing.assert_array_equal(model.position_embedding.weight.grad[stop:], 0.0)
 
-    print(f"GPT                      logits, next-token loss + gradients passed, error: {largest_error:.2e}")
+    print(f"GPT (tied weights)       logits, loss, gradients + shared update passed, error: {largest_error:.2e}")
 
 
 def compare_activations():

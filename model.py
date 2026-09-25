@@ -1,6 +1,6 @@
 import numpy as np
 
-from nn import Module, Parameter, Embedding, TransformerBlock, LayerNorm
+from nn import Module, Embedding, TransformerBlock, LayerNorm
 
 
 class GPT(Module):
@@ -19,7 +19,6 @@ class GPT(Module):
             for _ in range(num_layers)
         ]
         self.norm = LayerNorm(embedding_dim)
-        self.output_weight = Parameter(rng.normal(0.0, 0.02, size=(embedding_dim, vocab_size)))
         self.vocab_size = vocab_size
         self.context_length = context_length
 
@@ -35,4 +34,5 @@ class GPT(Module):
         x = self.token_embedding(token_ids) + self.position_embedding(np.arange(tokens))
         for block in self.blocks:
             x = block(x)
-        return self.norm(x) @ self.output_weight
+        
+            return self.norm(x) @ self.token_embedding.weight.T
