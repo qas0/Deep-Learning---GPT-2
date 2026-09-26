@@ -31,9 +31,6 @@ def check_gradients(name, function, inputs):
     tensors = [Tensor(value, requires_grad=True) for value in inputs]
     output = function(*tensors)
 
-    if output.data.size != 1:
-        raise ValueError("gradient checks require a scalar output")
-
     output.backward()
 
     def evaluate(*values):

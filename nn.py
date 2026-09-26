@@ -63,12 +63,6 @@ class Linear(Module):
     """transforms final input dimension using learned weights + bias"""
 
     def __init__(self, in_features, out_features, rng=None):
-        for size in (in_features, out_features):
-            if isinstance(size, bool) or not isinstance(size, (int, np.integer)):
-                raise TypeError("feature counts must be integers")
-            if size <= 0:
-                raise ValueError("feature counts must be positive")
-
         self.in_features = in_features
         self.out_features = out_features
         rng = np.random.default_rng() if rng is None else rng
@@ -82,10 +76,6 @@ class Linear(Module):
 
     def forward(self, x):
         """map shape (..., in_features) to (..., out_features)"""
-        if not x.shape or x.shape[-1] != self.in_features:
-            raise ValueError(f"expected final input dimension {self.in_features}")
-
-        
         return x @ self.weight + self.bias
 
 
@@ -93,12 +83,6 @@ class Embedding(Module):
     """maps integer IDs shaped (...) to vectors shaped (..., embedding_dim)"""
 
     def __init__(self, num_embeddings, embedding_dim, rng=None):
-        for size in (num_embeddings, embedding_dim):
-            if isinstance(size, bool) or not isinstance(size, (int, np.integer)):
-                raise TypeError("embedding sizes must be integers")
-            if size <= 0:
-                raise ValueError("embedding sizes must be positive")
-
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
         rng = np.random.default_rng() if rng is None else rng
@@ -121,10 +105,6 @@ class LayerNorm(Module):
     """normalises the final feature dimension with learned scale + bias"""
 
     def __init__(self, num_features, eps=1e-5):
-        if isinstance(num_features, bool) or not isinstance(num_features, (int, np.integer)):
-            raise TypeError("feature count must be an integer")
-        if num_features <= 0:
-            raise ValueError("feature count must be positive")
         if not np.isfinite(eps) or eps <= 0:
             raise ValueError("eps must be finite and positive")
 
@@ -149,8 +129,6 @@ class SelfAttention(Module):
     """mixes token information across attention heads"""
 
     def __init__(self, embedding_dim, rng=None, causal=False, num_heads=1):
-        if isinstance(num_heads, bool) or not isinstance(num_heads, (int, np.integer)):
-            raise TypeError("head count must be an integer")
         if num_heads <= 0:
             raise ValueError("head count must be positive")
         rng = np.random.default_rng() if rng is None else rng

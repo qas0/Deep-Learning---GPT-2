@@ -18,9 +18,6 @@ def compare_gradients(name, custom_function, torch_function, inputs):
     custom_output = custom_function(*custom_inputs)
     torch_output = torch_function(*torch_inputs)
 
-    if custom_output.data.size != 1 or torch_output.numel() != 1:
-        raise ValueError("comparisons require a scalar output")
-
     custom_output.backward()
     torch_output.backward()
 

@@ -7,8 +7,6 @@ class GPT(Module):
     
         
     def __init__(self, vocab_size, context_length, embedding_dim, num_heads, num_layers, rng=None):
-        if isinstance(num_layers, bool) or not isinstance(num_layers, (int, np.integer)):
-            raise TypeError("layer count must be an integer")
         if num_layers <= 0:
             raise ValueError("layer count must be positive")
         rng = np.random.default_rng() if rng is None else rng
@@ -35,4 +33,4 @@ class GPT(Module):
         for block in self.blocks:
             x = block(x)
         
-            return self.norm(x) @ self.token_embedding.weight.T
+        return self.norm(x) @ self.token_embedding.weight.T
