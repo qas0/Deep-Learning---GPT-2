@@ -1,5 +1,6 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import Mock
 
 import numpy as np
 import torch
@@ -9,6 +10,7 @@ from nn import Parameter, Linear, Embedding, LayerNorm, SelfAttention, FeedForwa
 from optim import SGD, Adam
 from model import GPT, save_model, load_model
 from tokeniser import CharacterTokeniser
+from generate import generate
 
 
 def compare_gradients(name, custom_function, torch_function, inputs):
@@ -520,6 +522,52 @@ def check_model_save_load():
     print("model save/load          vocabulary, exact logits, shared weights + shape check passed")
 
 
+def check_generation():
+    tokeniser = CharacterTokeniser("abc")
+
+    class FixedModel:
+        context_length = 3
+
+        def __init__(self):
+            self.contexts = []
+
+        def __call__(self, ids):
+            self.contexts.append(list(ids))
+            scores = np.tile([1002.0, 1001.0, 1000.0], (len(ids), 1))
+            scores[-1] = [1000.0, 1001.0, 1002.0]
+            return Tensor(scores)
+
+    for temperature in (0.5, 1.5):
+        model = FixedModel()
+        rng = Mock()
+        rng.choice.return_value = 2
+        text = generate(model, tokeniser, "abcab", 3, temperature, rng)
+        assert text == "abcabccc"
+        assert model.contexts == [[2, 0, 1], [0, 1, 2], [1, 2, 2]]
+        expected = torch.softmax(torch.tensor([1000.0, 1001.0, 1002.0], dtype=torch.float64) / temperature, dim=-1)
+        assert rng.choice.call_count == 3
+        for call in rng.choice.call_args_list:
+            assert call.args == (3,)
+            np.testing.assert_allclose(call.kwargs["p"], expected.numpy(), rtol=1e-12, atol=1e-12)
+
+    model = GPT(3, 3, 4, 2, 2, rng=np.random.default_rng(7))
+    CrossEntropyLoss()(model([0, 1, 2]), np.array([1, 2, 0])).backward()
+    before = [(p.data.copy(), p.grad.copy()) for p in model.parameters()]
+    first = generate(model, tokeniser, "ab", 12, rng=np.random.default_rng(7))
+    second = generate(model, tokeniser, "ab", 12, rng=np.random.default_rng(7))
+    assert first == second
+    assert first.startswith("ab") and len(first) == 14
+    assert set(first) <= set(tokeniser.characters)
+    assert generate(model, tokeniser, "ab", 0) == "ab"
+    for parameter, (data, gradient) in zip(model.parameters(), before):
+        np.testing.assert_array_equal(parameter.data, data)
+        np.testing.assert_array_equal(parameter.grad, gradient)
+    with np.testing.assert_raises(ValueError):
+        generate(model, tokeniser, "ab", temperature=0)
+
+    print("text generation          context, temperature probabilities, seed + unchanged weights/gradients passed")
+
+
 def compare_activations():
     """checks activation outputs + gradients against PyTorch, including 0 and large positive or negative inputs"""
     values = np.array([-20, -8, -3, -1, -0.1, -1e-8, 0, 1e-8, 0.1, 1, 3, 20])
@@ -770,6 +818,7 @@ def main():
     compare_transformer_block(rng)
     compare_gpt(rng)
     check_model_save_load()
+    check_generation()
 
     print(f"all comparisons passed using PyTorch {torch.__version__}.")
 
