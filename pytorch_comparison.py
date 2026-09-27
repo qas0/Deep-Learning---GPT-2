@@ -1,10 +1,14 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 import numpy as np
 import torch
 
 from tensor import Tensor
 from nn import Parameter, Linear, Embedding, LayerNorm, SelfAttention, FeedForward, TransformerBlock, ReLU, GELU, Softmax, CrossEntropyLoss
 from optim import SGD, Adam
-from model import GPT
+from model import GPT, save_model, load_model
+from tokeniser import CharacterTokeniser
 
 
 def compare_gradients(name, custom_function, torch_function, inputs):
@@ -464,6 +468,58 @@ def compare_gpt(rng):
     print(f"GPT (tied weights)       logits, loss, gradients + shared update passed, error: {largest_error:.2e}")
 
 
+def check_model_save_load():
+    tokeniser = CharacterTokeniser("hello! \né")
+    ids = np.array([tokeniser.encode("hell"), tokeniser.encode("ello")])
+    targets = np.array([tokeniser.encode("ello"), tokeniser.encode("llo!")])
+    loss_function = CrossEntropyLoss()
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "model.npz"
+        for embedding_dim, num_heads, num_layers in ((4, 1, 1), (8, 2, 2)):
+            model = GPT(
+                tokeniser.vocab_size, 6, embedding_dim, num_heads, num_layers,
+                rng=np.random.default_rng(7),
+            )
+            loss_function(model(ids), targets).backward()
+            Adam(model.parameters(), lr=0.001).step()
+            expected = model(ids).data.copy()
+            expected_parameters = [p.data.copy() for p in model.parameters()]
+            save_model(model, tokeniser, path)
+
+            
+            model.token_embedding.weight.data.fill(0)
+            loaded, restored_tokeniser = load_model(path)
+            assert restored_tokeniser.characters == tokeniser.characters
+            assert restored_tokeniser.encode("hello! \né") == tokeniser.encode("hello! \né")
+            assert restored_tokeniser.decode(ids[0]) == "hell"
+            assert loaded.context_length == 6
+            assert len(loaded.blocks) == num_layers
+            assert loaded.blocks[0].attention.num_heads == num_heads
+            np.testing.assert_array_equal(loaded(ids).data, expected)
+            parameters = loaded.parameters()
+            assert len(parameters) == len(expected_parameters)
+            for parameter, expected_values in zip(parameters, expected_parameters):
+                np.testing.assert_array_equal(parameter.data, expected_values)
+            assert sum(p is loaded.token_embedding.weight for p in parameters) == 1
+            assert all(np.all(p.grad == 0) for p in parameters)
+
+            
+            loss_function(loaded(ids), targets).backward()
+            assert all(np.all(np.isfinite(p.grad)) for p in parameters)
+            before = loaded.token_embedding.weight.data.copy()
+            SGD(parameters, lr=0.01).step()
+            assert np.any(loaded.token_embedding.weight.data != before)
+
+        with np.load(path, allow_pickle=False) as saved:
+            values = {name: saved[name] for name in saved.files}
+        values["parameter_0"] = values["parameter_0"][:1]
+        np.savez(path, **values)
+        with np.testing.assert_raises_regex(ValueError, "wrong shape"):
+            load_model(path)
+
+    print("model save/load          vocabulary, exact logits, shared weights + shape check passed")
+
+
 def compare_activations():
     """checks activation outputs + gradients against PyTorch, including 0 and large positive or negative inputs"""
     values = np.array([-20, -8, -3, -1, -0.1, -1e-8, 0, 1e-8, 0.1, 1, 3, 20])
@@ -713,6 +769,7 @@ def main():
     compare_feed_forward(rng)
     compare_transformer_block(rng)
     compare_gpt(rng)
+    check_model_save_load()
 
     print(f"all comparisons passed using PyTorch {torch.__version__}.")
 

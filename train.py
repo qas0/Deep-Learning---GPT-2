@@ -1,9 +1,10 @@
 import gc
+from pathlib import Path
 from time import perf_counter
 
 import numpy as np
 
-from model import GPT
+from model import GPT, save_model
 from nn import CrossEntropyLoss
 from optim import Adam
 from text_data import load_shakespeare, get_batch
@@ -23,7 +24,7 @@ def evaluate(model, token_ids, loss_function, batch_size, batches, seed):
     return mean_loss
 
 
-def main(steps=1000):
+def main(steps=1000, save_path=None):
     seed = 7
     batch_size = 8
     context_length = 32
@@ -81,6 +82,12 @@ def main(steps=1000):
         optimiser.step()
 
     print(f"Training and evaluation time: {perf_counter() - start:.2f}s")
+    if save_path is None:
+        save_path = Path(__file__).resolve().parent / "checkpoints" / f"shakespeare_{steps}_steps.npz"
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    save_model(model, tokeniser, save_path)
+    print(f"Saved final model: {save_path.resolve()}")
 
 
 if __name__ == "__main__":
