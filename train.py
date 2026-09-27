@@ -1,3 +1,4 @@
+import gc
 from time import perf_counter
 
 import numpy as np
@@ -60,6 +61,8 @@ def main(steps=1000):
             validation_loss = evaluate(
                 model, validation_ids, loss_function, batch_size, eval_batches, seed + 3,
             )
+            # clears unused graphs before building up in training
+            gc.collect()
             print(
                 f"Step {step:4d}: train loss={train_loss:.4f} | "
                 f"validation loss={validation_loss:.4f} | elapsed={perf_counter() - start:.1f}s",
