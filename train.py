@@ -67,6 +67,17 @@ def main(steps=1000, save_path=None, context_length=32, batch_size=8):
     loss_function = CrossEntropyLoss()
     train_rng = np.random.default_rng(seed + 1)
 
+    if save_path is None:
+        save_path = (
+            Path(__file__).resolve().parent / "checkpoints"
+            / f"shakespeare_ctx{context_length}_emb{embedding_dim}_{steps}_steps.npz"
+        )
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    best_path = save_path.with_name(f"{save_path.stem}_best.npz")
+    best_validation_loss = float("inf")
+    best_step = 0
+
     print(f"Tiny Shakespeare: {len(train_ids):,} training, {len(validation_ids):,} validation characters")
     print(f"Vocabulary: {tokeniser.vocab_size} characters")
     print(f"GPT: layers={num_layers}, heads={num_heads}, embedding={embedding_dim}, context={context_length}")
@@ -84,6 +95,11 @@ def main(steps=1000, save_path=None, context_length=32, batch_size=8):
             validation_loss = evaluate(
                 model, validation_ids, loss_function, batch_size, eval_batches, seed + 3,
             )
+            if validation_loss < best_validation_loss:
+                best_validation_loss = validation_loss
+                best_step = step
+                save_model(model, tokeniser, best_path)
+
             # clears unused graphs before building up in training
             gc.collect()
             print(
@@ -104,12 +120,10 @@ def main(steps=1000, save_path=None, context_length=32, batch_size=8):
         optimiser.step()
 
     print(f"Training and evaluation time: {perf_counter() - start:.2f}s")
-    if save_path is None:
-        save_path = Path(__file__).resolve().parent / "checkpoints" / f"shakespeare_ctx{context_length}_{steps}_steps.npz"
-    save_path = Path(save_path)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
     save_model(model, tokeniser, save_path)
     print(f"Saved final model: {save_path.resolve()}")
+    print(f"Best validation loss: {best_validation_loss:.4f} at step {best_step}")
+    print(f"Saved best model: {best_path.resolve()}")
 
 
 if __name__ == "__main__":
