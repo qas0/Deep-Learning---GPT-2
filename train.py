@@ -50,7 +50,7 @@ def compare_contexts(checkpoint_paths, batches=100):
 
 def main(steps=1000, save_path=None, context_length=32, batch_size=8):
     seed = 7
-    embedding_dim = 32
+    embedding_dim = 64
     num_heads = 4
     num_layers = 2
     learning_rate = 0.001
@@ -113,7 +113,12 @@ def main(steps=1000, save_path=None, context_length=32, batch_size=8):
 
 
 if __name__ == "__main__":
-    main()
+    main(
+        steps=6000,
+        context_length=32,
+        batch_size=8,
+        save_path="checkpoints/shakespeare_ctx32_emb64_6000_steps.npz",
+    )
 
 
     # compare_contexts([

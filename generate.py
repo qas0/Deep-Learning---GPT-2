@@ -39,5 +39,13 @@ def main(prompt="ROMEO:\n", new_tokens=300, temperature=1.0, seed=7, checkpoint_
     print(generate(model, tokeniser, prompt, new_tokens, temperature, np.random.default_rng(seed)))
 
 
+# if __name__ == "__main__":
+  #  main(temperature=0.7)
 if __name__ == "__main__":
-    main(temperature=0.7)
+    main(
+        temperature=0.7,
+        checkpoint_path=Path(__file__).resolve().parent
+        / "checkpoints"
+        / "shakespeare_ctx32_emb64_6000_steps.npz",
+    )
+    
