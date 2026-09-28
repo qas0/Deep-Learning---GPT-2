@@ -28,7 +28,7 @@ def generate(model, tokeniser, prompt, new_tokens=300, temperature=1.0, rng=None
 
 def main(prompt="ROMEO:\n", new_tokens=300, temperature=1.0, seed=7, checkpoint_path=None):
     if checkpoint_path is None:
-        checkpoint_path = Path(__file__).resolve().parent / "checkpoints" / "shakespeare_3000_steps.npz"
+        checkpoint_path = Path(__file__).resolve().parent / "checkpoints" / "shakespeare_6000_steps.npz"
     path = Path(checkpoint_path)
     model, tokeniser = load_model(path)
     print(f"Model: {path}")
@@ -40,4 +40,4 @@ def main(prompt="ROMEO:\n", new_tokens=300, temperature=1.0, seed=7, checkpoint_
 
 
 if __name__ == "__main__":
-    main()
+    main(temperature=0.7)

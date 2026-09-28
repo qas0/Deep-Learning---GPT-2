@@ -4,7 +4,7 @@ from time import perf_counter
 
 import numpy as np
 
-from model import GPT, save_model
+from model import GPT, save_model, load_model
 from nn import CrossEntropyLoss
 from optim import Adam
 from text_data import load_shakespeare, get_batch
@@ -24,10 +24,32 @@ def evaluate(model, token_ids, loss_function, batch_size, batches, seed):
     return mean_loss
 
 
-def main(steps=1000, save_path=None):
+def compare_contexts(checkpoint_paths, batches=100):
+    _, _, validation_ids = load_shakespeare()
+    models = [load_model(path)[0] for path in checkpoint_paths]
+    context_length = max(model.context_length for model in models)
+    rng = np.random.default_rng(10)
+    loss_function = CrossEntropyLoss()
+    losses = np.zeros(len(models))
+
+    for batch in range(batches):
+        inputs, targets = get_batch(validation_ids, 8, context_length, rng)
+        for index, model in enumerate(models):
+            logits = model(inputs[:, -model.context_length:])
+            loss = loss_function(logits[:, -1, :], targets[:, -1])
+            losses[index] += loss.data.item()
+        if (batch + 1) % 10 == 0 or batch + 1 == batches:
+            gc.collect()
+
+    losses /= batches
+    print(f"Matched validation: {batches * 8} next-character targets, seed: 10")
+    for path, model, loss in zip(checkpoint_paths, models, losses):
+        print(f"{path}: context={model.context_length}, loss={loss:.4f}")
+    return losses
+
+
+def main(steps=1000, save_path=None, context_length=32, batch_size=8):
     seed = 7
-    batch_size = 8
-    context_length = 32
     embedding_dim = 32
     num_heads = 4
     num_layers = 2
@@ -83,7 +105,7 @@ def main(steps=1000, save_path=None):
 
     print(f"Training and evaluation time: {perf_counter() - start:.2f}s")
     if save_path is None:
-        save_path = Path(__file__).resolve().parent / "checkpoints" / f"shakespeare_{steps}_steps.npz"
+        save_path = Path(__file__).resolve().parent / "checkpoints" / f"shakespeare_ctx{context_length}_{steps}_steps.npz"
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     save_model(model, tokeniser, save_path)
@@ -92,3 +114,9 @@ def main(steps=1000, save_path=None):
 
 if __name__ == "__main__":
     main()
+
+
+    # compare_contexts([
+    #   Path(__file__).resolve().parent / "checkpoints" / "shakespeare_6000_steps.npz",
+    #     Path(__file__).resolve().parent / "checkpoints" / "shakespeare_ctx64_6000_steps.npz",
+    #])
