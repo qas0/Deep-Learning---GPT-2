@@ -128,10 +128,9 @@ def main(steps=1000, save_path=None, context_length=32, batch_size=8):
 
 if __name__ == "__main__":
     main(
-        steps=6000,
+        steps=10000,
         context_length=32,
         batch_size=8,
-        save_path="checkpoints/shakespeare_ctx32_emb64_6000_steps.npz",
     )
 
 
