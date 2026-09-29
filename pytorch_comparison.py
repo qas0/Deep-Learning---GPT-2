@@ -393,15 +393,18 @@ def compare_transformer_block(rng):
 
 
 def compare_gpt(rng):
-    
+    """checks GPT outputs, gradients + weights across Adam updates"""
     largest_error = 0.0
+    largest_output_error = 0.0
+    largest_loss_error = 0.0
+    largest_update_error = 0.0
+    steps = 10
     sequences = (
         np.array([1, 1, 2, 3, 4]),
         np.array([[1, 2, 1, 4], [3, 1, 3, 2]]),
         np.array([[2, 2]]),
     )
     for sequence in sequences:
-        ids, targets = sequence[..., :-1], sequence[..., 1:]
         model = GPT(7, 4, embedding_dim=4, num_heads=2, num_layers=2, rng=rng)
         token_embedding = torch.nn.Embedding(7, 4, dtype=torch.float64)
         position_embedding = torch.nn.Embedding(4, 4, dtype=torch.float64)
@@ -426,28 +429,58 @@ def compare_gpt(rng):
             {custom for custom, _ in pairs} | {custom for custom, _, _ in mappings}
         )
 
-        output = model(ids)
-        torch_ids = torch.tensor(ids, dtype=torch.long)
-        expected = token_embedding(torch_ids) + position_embedding(torch.arange(ids.shape[-1]))
-        mask = torch.ones(ids.shape[-1], ids.shape[-1], dtype=torch.bool).triu(1)
-        for reference in references:
-            expected = reference(expected, src_mask=mask)
-        expected = norm(expected) @ token_embedding.weight.T
-        assert output.shape == ids.shape + (7,)
-        np.testing.assert_allclose(output.data, expected.detach().numpy(), rtol=1e-9, atol=1e-10)
+        torch_parameters = [
+            parameter
+            for layer in (token_embedding, position_embedding, norm, *references)
+            for parameter in layer.parameters()
+        ]
+        optimiser = Adam(parameters, lr=0.001)
+        torch_optimiser = torch.optim.Adam(torch_parameters, lr=0.001)
 
-        loss = CrossEntropyLoss()(output, targets)
-        expected_loss = torch.nn.functional.cross_entropy(
-            expected.reshape(-1, 7), torch.tensor(targets.reshape(-1), dtype=torch.long)
-        )
-        np.testing.assert_allclose(loss.data, expected_loss.detach().numpy(), rtol=1e-9, atol=1e-10)
-        loss.backward()
-        expected_loss.backward()
-        gradients = [(custom.grad, expected.grad.numpy()) for custom, expected in pairs]
-        gradients.extend((custom.grad, expected.grad[rows].numpy().T) for custom, expected, rows in mappings)
-        for actual, target in gradients:
-            np.testing.assert_allclose(actual, target, rtol=1e-9, atol=1e-10)
-            largest_error = max(largest_error, float(np.max(np.abs(actual - target))))
+        # keeps Adam history while both models see the same changing sequences
+        for step in range(steps + 1):
+            shifted = np.roll(sequence, step, axis=-1)
+            ids, targets = shifted[..., :-1], shifted[..., 1:]
+            optimiser.zero_grad()
+            torch_optimiser.zero_grad(set_to_none=False)
+
+            output = model(ids)
+            torch_ids = torch.tensor(ids, dtype=torch.long)
+            expected = token_embedding(torch_ids) + position_embedding(torch.arange(ids.shape[-1]))
+            mask = torch.ones(ids.shape[-1], ids.shape[-1], dtype=torch.bool).triu(1)
+            for reference in references:
+                expected = reference(expected, src_mask=mask)
+            expected = norm(expected) @ token_embedding.weight.T
+            assert output.shape == ids.shape + (7,)
+            np.testing.assert_allclose(output.data, expected.detach().numpy(), rtol=1e-9, atol=1e-10)
+            largest_output_error = max(
+                largest_output_error, float(np.max(np.abs(output.data - expected.detach().numpy())))
+            )
+
+            loss = CrossEntropyLoss()(output, targets)
+            expected_loss = torch.nn.functional.cross_entropy(
+                expected.reshape(-1, 7), torch.tensor(targets.reshape(-1), dtype=torch.long)
+            )
+            np.testing.assert_allclose(loss.data, expected_loss.detach().numpy(), rtol=1e-9, atol=1e-10)
+            largest_loss_error = max(largest_loss_error, abs(loss.data.item() - expected_loss.item()))
+            loss.backward()
+            expected_loss.backward()
+            gradients = [(custom.grad, expected.grad.numpy()) for custom, expected in pairs]
+            gradients.extend((custom.grad, expected.grad[rows].numpy().T) for custom, expected, rows in mappings)
+            for actual, target in gradients:
+                np.testing.assert_allclose(actual, target, rtol=1e-9, atol=1e-10)
+                largest_error = max(largest_error, float(np.max(np.abs(actual - target))))
+
+            # checks predictions after the final update too
+            if step == steps:
+                break
+            optimiser.step()
+            torch_optimiser.step()
+            weights = [(custom.data, expected.detach().numpy()) for custom, expected in pairs]
+            weights.extend((custom.data, expected.detach()[rows].numpy().T) for custom, expected, rows in mappings)
+            for actual, target in weights:
+                np.testing.assert_allclose(actual, target, rtol=1e-9, atol=1e-10)
+                largest_update_error = max(largest_update_error, float(np.max(np.abs(actual - target))))
 
         before = model.token_embedding.weight.data.copy()
         SGD(parameters, lr=0.01).step()
@@ -467,7 +500,11 @@ def compare_gpt(rng):
             CrossEntropyLoss()(model(ids)[..., :stop, :], targets[..., :stop]).backward()
             np.testing.assert_array_equal(model.position_embedding.weight.grad[stop:], 0.0)
 
-    print(f"GPT (tied weights)       logits, loss, gradients + shared update passed, error: {largest_error:.2e}")
+    print(f"GPT (tied weights)       {steps} Adam steps per case, shared SGD update + causality passed")
+    print(
+        f"GPT maximum errors      logits: {largest_output_error:.2e}, loss: {largest_loss_error:.2e}, "
+        f"gradients: {largest_error:.2e}, updated weights: {largest_update_error:.2e}"
+    )
 
 
 def check_model_save_load():
