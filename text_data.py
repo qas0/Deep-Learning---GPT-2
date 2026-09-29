@@ -44,6 +44,9 @@ def main():
     batch_size = 4
     context_length = 32
     tokeniser, train_ids, validation_ids = load_shakespeare()
+
+    for char, token_id in tokeniser.char_to_id.items():
+        print(repr(char), token_id)
     inputs, targets = get_batch(train_ids, batch_size, context_length, np.random.default_rng(seed))
 
     print(f"Tiny Shakespeare: {len(train_ids):,} training, {len(validation_ids):,} validation characters")

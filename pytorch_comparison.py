@@ -1,9 +1,12 @@
+import gc
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import perf_counter
 from unittest.mock import Mock
 
 import numpy as np
 import torch
+from threadpoolctl import threadpool_info, threadpool_limits
 
 from tensor import Tensor
 from nn import Parameter, Linear, Embedding, LayerNorm, SelfAttention, FeedForward, TransformerBlock, ReLU, GELU, Softmax, CrossEntropyLoss
@@ -392,6 +395,41 @@ def compare_transformer_block(rng):
     print(f"transformer block        gradient error: {largest_error:.2e}")
 
 
+def torch_gpt_reference(model):
+    width = model.token_embedding.embedding_dim
+    token_embedding = torch.nn.Embedding(model.vocab_size, width, dtype=torch.float64)
+    position_embedding = torch.nn.Embedding(model.context_length, width, dtype=torch.float64)
+    norm = torch.nn.LayerNorm(width, eps=model.norm.eps, dtype=torch.float64)
+    pairs = (
+        (model.token_embedding.weight, token_embedding.weight),
+        (model.position_embedding.weight, position_embedding.weight),
+        (model.norm.weight, norm.weight),
+        (model.norm.bias, norm.bias),
+    )
+    with torch.no_grad():
+        for custom, expected in pairs:
+            expected.copy_(torch.tensor(custom.data))
+    references, mappings = [], []
+    for block in model.blocks:
+        reference, block_mappings = torch_block_reference(block)
+        references.append(reference)
+        mappings.extend(block_mappings)
+    parameters = [
+        parameter
+        for layer in (token_embedding, position_embedding, norm, *references)
+        for parameter in layer.parameters()
+    ]
+
+    def forward(ids):
+        output = token_embedding(ids) + position_embedding(torch.arange(ids.shape[-1]))
+        mask = torch.ones(ids.shape[-1], ids.shape[-1], dtype=torch.bool).triu(1)
+        for reference in references:
+            output = reference(output, src_mask=mask)
+        return norm(output) @ token_embedding.weight.T
+
+    return forward, parameters, pairs, mappings
+
+
 def compare_gpt(rng):
     """checks GPT outputs, gradients + weights across Adam updates"""
     largest_error = 0.0
@@ -406,34 +444,13 @@ def compare_gpt(rng):
     )
     for sequence in sequences:
         model = GPT(7, 4, embedding_dim=4, num_heads=2, num_layers=2, rng=rng)
-        token_embedding = torch.nn.Embedding(7, 4, dtype=torch.float64)
-        position_embedding = torch.nn.Embedding(4, 4, dtype=torch.float64)
-        norm = torch.nn.LayerNorm(4, dtype=torch.float64)
-        pairs = (
-            (model.token_embedding.weight, token_embedding.weight),
-            (model.position_embedding.weight, position_embedding.weight),
-            (model.norm.weight, norm.weight),
-            (model.norm.bias, norm.bias),
-        )
-        with torch.no_grad():
-            for custom, expected in pairs:
-                expected.copy_(torch.tensor(custom.data))
-        references, mappings = [], []
-        for block in model.blocks:
-            reference, block_mappings = torch_block_reference(block)
-            references.append(reference)
-            mappings.extend(block_mappings)
+        torch_forward, torch_parameters, pairs, mappings = torch_gpt_reference(model)
         parameters = model.parameters()
         assert len(parameters) == len(pairs) + len(mappings)
         assert set(parameters) == (
             {custom for custom, _ in pairs} | {custom for custom, _, _ in mappings}
         )
 
-        torch_parameters = [
-            parameter
-            for layer in (token_embedding, position_embedding, norm, *references)
-            for parameter in layer.parameters()
-        ]
         optimiser = Adam(parameters, lr=0.001)
         torch_optimiser = torch.optim.Adam(torch_parameters, lr=0.001)
 
@@ -446,11 +463,7 @@ def compare_gpt(rng):
 
             output = model(ids)
             torch_ids = torch.tensor(ids, dtype=torch.long)
-            expected = token_embedding(torch_ids) + position_embedding(torch.arange(ids.shape[-1]))
-            mask = torch.ones(ids.shape[-1], ids.shape[-1], dtype=torch.bool).triu(1)
-            for reference in references:
-                expected = reference(expected, src_mask=mask)
-            expected = norm(expected) @ token_embedding.weight.T
+            expected = torch_forward(torch_ids)
             assert output.shape == ids.shape + (7,)
             np.testing.assert_allclose(output.data, expected.detach().numpy(), rtol=1e-9, atol=1e-10)
             largest_output_error = max(
@@ -486,7 +499,7 @@ def compare_gpt(rng):
         SGD(parameters, lr=0.01).step()
         np.testing.assert_allclose(
             model.token_embedding.weight.data,
-            before - 0.01 * token_embedding.weight.grad.numpy(), rtol=1e-9, atol=1e-10,
+            before - 0.01 * pairs[0][1].grad.numpy(), rtol=1e-9, atol=1e-10,
         )
         output = model(ids)
         for stop in range(1, ids.shape[-1]):
@@ -505,6 +518,91 @@ def compare_gpt(rng):
         f"GPT maximum errors      logits: {largest_output_error:.2e}, loss: {largest_loss_error:.2e}, "
         f"gradients: {largest_error:.2e}, updated weights: {largest_update_error:.2e}"
     )
+
+
+def benchmark_gpt(warmup=5, repeats=30):
+    rng = np.random.default_rng(7)
+    model = GPT(65, 32, embedding_dim=64, num_heads=4, num_layers=2, rng=rng)
+    torch_forward, torch_parameters, pairs, mappings = torch_gpt_reference(model)
+    sequences = rng.integers(0, model.vocab_size, size=(8, model.context_length + 1))
+    ids, targets = sequences[:, :-1], sequences[:, 1:]
+    torch_ids = torch.tensor(ids, dtype=torch.long)
+    torch_targets = torch.tensor(targets.reshape(-1), dtype=torch.long)
+    loss_function = CrossEntropyLoss()
+    optimiser = Adam(model.parameters(), lr=0.001)
+    torch_optimiser = torch.optim.Adam(torch_parameters, lr=0.001)
+
+    def custom_loss():
+        return loss_function(model(ids), targets)
+
+    def torch_loss():
+        return torch.nn.functional.cross_entropy(
+            torch_forward(torch_ids).reshape(-1, model.vocab_size), torch_targets,
+        )
+
+    def timed_step(loss_function, zero_grad, step):
+        start = perf_counter()
+        zero_grad()
+        cleared = perf_counter()
+        loss = loss_function()
+        forwarded = perf_counter()
+        loss.backward()
+        backwarded = perf_counter()
+        step()
+        updated = perf_counter()
+        return (forwarded - cleared, backwarded - forwarded, updated - backwarded, updated - start)
+
+    runners = (
+        (custom_loss, optimiser.zero_grad, optimiser.step),
+        (torch_loss, lambda: torch_optimiser.zero_grad(set_to_none=False), torch_optimiser.step),
+    )
+    times = [[], []]
+    collecting = gc.isenabled()
+    with threadpool_limits(limits=1):
+        assert torch.get_num_threads() == 1
+        assert all(pool["num_threads"] == 1 for pool in threadpool_info())
+        np.testing.assert_allclose(custom_loss().data, torch_loss().item(), rtol=1e-9, atol=1e-10)
+        gc.collect()
+        gc.disable()
+        try:
+            for index in range(warmup + repeats):
+                # alternates which model runs first to reduce ordering effects
+                order = (0, 1) if index % 2 == 0 else (1, 0)
+                for engine in order:
+                    elapsed = timed_step(*runners[engine])
+                    if index >= warmup:
+                        times[engine].append(elapsed)
+                # keeps unused graphs bounded without adding cleanup to the timings
+                if (index + 1) % 5 == 0:
+                    gc.collect()
+        finally:
+            gc.collect()
+            if collecting:
+                gc.enable()
+
+        np.testing.assert_allclose(
+            model(ids).data, torch_forward(torch_ids).detach().numpy(), rtol=1e-9, atol=1e-10,
+        )
+        np.testing.assert_allclose(custom_loss().data, torch_loss().item(), rtol=1e-9, atol=1e-10)
+        weights = [(custom.data, expected.detach().numpy()) for custom, expected in pairs]
+        weights.extend((custom.data, expected.detach()[rows].numpy().T) for custom, expected, rows in mappings)
+        for actual, expected in weights:
+            np.testing.assert_allclose(actual, expected, rtol=1e-9, atol=1e-10)
+
+    print("\nGPT CPU benchmark: float64, one thread, seed 7, synthetic token IDs")
+    print("Batch=8, context=32, embedding=64, heads=4, layers=2, Adam lr=0.001")
+    print(f"Parameters: {sum(p.data.size for p in model.parameters()):,}; warm-up={warmup}, measured steps={repeats}")
+    print("Median [25th, 75th percentile] milliseconds; full step includes gradient clearing.")
+    print("Excludes data preparation, validation, checkpoint saving and garbage collection.")
+    print("Final logits, loss and weights agree with PyTorch.")
+    summaries = [np.percentile(np.array(samples) * 1000, [25, 50, 75], axis=0) for samples in times]
+    for index, name in enumerate(("Forward + loss", "Backward", "Adam update", "Full step")):
+        custom, reference = (summary[:, index] for summary in summaries)
+        print(
+            f"{name:<16} NumPy {custom[1]:.3f} [{custom[0]:.3f}, {custom[2]:.3f}] | "
+            f"PyTorch {reference[1]:.3f} [{reference[0]:.3f}, {reference[2]:.3f}] | "
+            f"NumPy/PyTorch {custom[1] / reference[1]:.2f}x"
+        )
 
 
 def check_model_save_load():
@@ -862,3 +960,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    benchmark_gpt()
