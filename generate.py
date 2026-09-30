@@ -46,5 +46,5 @@ if __name__ == "__main__":
         temperature=0.7,
         checkpoint_path=Path(__file__).resolve().parent
         / "checkpoints"
-        / "shakespeare_ctx32_emb128_10000_steps_best.npz",
+        / "shakespeare_ctx32_emb128_20000_steps_best.npz",
     )

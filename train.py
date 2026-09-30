@@ -128,7 +128,7 @@ def main(steps=1000, save_path=None, context_length=32, batch_size=8):
 
 if __name__ == "__main__":
     main(
-        steps=10000,
+        steps=20000,
         context_length=32,
         batch_size=8,
     )
