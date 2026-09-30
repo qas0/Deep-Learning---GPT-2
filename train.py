@@ -50,7 +50,7 @@ def compare_contexts(checkpoint_paths, batches=100):
 
 def main(steps=1000, save_path=None, context_length=32, batch_size=8):
     seed = 7
-    embedding_dim = 64
+    embedding_dim = 128
     num_heads = 4
     num_layers = 2
     learning_rate = 0.001
