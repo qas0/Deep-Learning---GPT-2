@@ -7,7 +7,7 @@ import numpy as np
 from model import GPT, save_model, load_model
 from nn import CrossEntropyLoss
 from optim import Adam
-from text_data import load_shakespeare, get_batch
+from text_data import load_shakespeare, load_tinystories, get_batch
 
 
 def evaluate(model, token_ids, loss_function, batch_size, batches, seed):
@@ -25,8 +25,12 @@ def evaluate(model, token_ids, loss_function, batch_size, batches, seed):
 
 
 def compare_contexts(checkpoint_paths, batches=100):
-    _, _, validation_ids = load_shakespeare()
-    models = [load_model(path)[0] for path in checkpoint_paths]
+    tokeniser, _, validation_ids = load_shakespeare()
+    loaded = [load_model(path) for path in checkpoint_paths]
+   # Shakespeares comparison IDs
+    if any(getattr(saved, "characters", None) != tokeniser.characters for _, saved in loaded):
+        raise ValueError("this comparison requires Shakespeare character checkpoints")
+    models = [model for model, _ in loaded]
     context_length = max(model.context_length for model in models)
     rng = np.random.default_rng(10)
     loss_function = CrossEntropyLoss()
@@ -48,16 +52,19 @@ def compare_contexts(checkpoint_paths, batches=100):
     return losses
 
 
-def main(steps=1000, save_path=None, context_length=32, batch_size=8):
+def main(steps=1000, save_path=None, context_length=32, batch_size=8, dataset="tinystories"):
     seed = 7
     embedding_dim = 128
     num_heads = 4
     num_layers = 2
     learning_rate = 0.001
+    minimum_learning_rate = 0.0001
+    decay_start = steps // 2
     eval_interval = 100
     eval_batches = 10
 
-    tokeniser, train_ids, validation_ids = load_shakespeare()
+    loader = {"shakespeare": load_shakespeare, "tinystories": load_tinystories}[dataset]
+    tokeniser, train_ids, validation_ids = loader()
     model = GPT(
         tokeniser.vocab_size, context_length, embedding_dim, num_heads, num_layers,
         rng=np.random.default_rng(seed),
@@ -70,7 +77,7 @@ def main(steps=1000, save_path=None, context_length=32, batch_size=8):
     if save_path is None:
         save_path = (
             Path(__file__).resolve().parent / "checkpoints"
-            / f"shakespeare_ctx{context_length}_emb{embedding_dim}_{steps}_steps.npz"
+            / f"{dataset}_ctx{context_length}_emb{embedding_dim}_{steps}_steps_lr_decay.npz"
         )
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,8 +85,10 @@ def main(steps=1000, save_path=None, context_length=32, batch_size=8):
     best_validation_loss = float("inf")
     best_step = 0
 
-    print(f"Tiny Shakespeare: {len(train_ids):,} training, {len(validation_ids):,} validation characters")
-    print(f"Vocabulary: {tokeniser.vocab_size} characters")
+    name = "TinyStories" if dataset == "tinystories" else "Tiny Shakespeare"
+    unit = "word/punctuation tokens" if dataset == "tinystories" else "characters"
+    print(f"{name}: {len(train_ids):,} training, {len(validation_ids):,} validation {unit}")
+    print(f"Vocabulary: {tokeniser.vocab_size} {unit}")
     print(f"GPT: layers={num_layers}, heads={num_heads}, embedding={embedding_dim}, context={context_length}")
     print(f"Parameters: {sum(p.data.size for p in parameters):,}")
     print(f"Adam: lr={learning_rate}, betas={optimiser.betas}, eps={optimiser.eps}")
@@ -110,6 +119,10 @@ def main(steps=1000, save_path=None, context_length=32, batch_size=8):
         if step == steps:
             break
 
+        # reduces later updates without resetting adams averages
+        progress = max(0, (step + 1 - decay_start) / (steps - decay_start))
+        optimiser.lr = learning_rate + progress * (minimum_learning_rate - learning_rate)
+
         inputs, targets = get_batch(train_ids, batch_size, context_length, train_rng)
         logits = model(inputs)
         loss = loss_function(logits, targets)
@@ -128,7 +141,7 @@ def main(steps=1000, save_path=None, context_length=32, batch_size=8):
 
 if __name__ == "__main__":
     main(
-        steps=20000,
+        steps=1000,
         context_length=32,
         batch_size=8,
     )

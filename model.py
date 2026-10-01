@@ -1,7 +1,7 @@
 import numpy as np
 
 from nn import Module, Embedding, TransformerBlock, LayerNorm
-from tokeniser import CharacterTokeniser
+from tokeniser import CharacterTokeniser, WordTokeniser
 
 
 class GPT(Module):
@@ -36,11 +36,16 @@ class GPT(Module):
 
 
 def save_model(model, tokeniser, path):
-    """saves weights, model settings + the character vocabulary"""
+    """saves weights, model settings + the tokeniser vocabulary"""
     weights = {f"parameter_{index}": p.data for index, p in enumerate(model.parameters())}
+    vocabulary = (
+        {"tokeniser_type": "word", "vocabulary": np.array(tokeniser.vocabulary)}
+        if isinstance(tokeniser, WordTokeniser)
+        else {"characters": np.array(tokeniser.characters)}
+    )
     np.savez(
         path,
-        characters=np.array(tokeniser.characters),
+        **vocabulary,
         context_length=model.context_length,
         embedding_dim=model.token_embedding.embedding_dim,
         num_heads=model.blocks[0].attention.num_heads,
@@ -52,7 +57,10 @@ def save_model(model, tokeniser, path):
 def load_model(path):
     """rebuilds the model + tokeniser from a saved npz file"""
     with np.load(path, allow_pickle=False) as saved:
-        tokeniser = CharacterTokeniser("".join(saved["characters"].tolist()))
+        if "tokeniser_type" in saved and saved["tokeniser_type"].item() == "word":
+            tokeniser = WordTokeniser(vocabulary=saved["vocabulary"].tolist())
+        else:
+            tokeniser = CharacterTokeniser("".join(saved["characters"].tolist()))
         model = GPT(
             tokeniser.vocab_size,
             context_length=saved["context_length"].item(),

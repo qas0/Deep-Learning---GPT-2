@@ -5,4 +5,5 @@ venv/
 .vscode/
 .env
 data/tiny_shakespeare.txt
+data/tinystories_*.txt
 checkpoints/
